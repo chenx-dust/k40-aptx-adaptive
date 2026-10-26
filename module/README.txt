@@ -1,51 +1,27 @@
-Redmi K40 / PixelOS aptX Adaptive 实验模块 0.5
+K40 aptX Adaptive for PixelOS — 0.5
 
-0.5：核对CAF字段来源后，厂商non-TWS角色改为0（不是PCM立体声枚举2）；
-补齐EDR/3Mbps和1008上限的MTU规则；start之后排队发送HQ模式命令。
-与CAF序列化语句进行72组启动报文及HQ命令逐字节对比通过。2026-10-27，使用者确认0.5 Adaptive正常出声。
+Platform
+Redmi K40 / POCO F3 (alioth), Android 17 / SDK 37, Magisk.
+Adaptive R2, single-device non-TWS+ transport, HQ mode.
+Version 0.5 supports Adaptive audio playback on the target PixelOS setup.
 
-0.4：启动报文长度与 CAF 实际发送的 66 字节一致，省略一个末尾零填充；
-明确的参数拒绝不再永久锁住后续请求。参数无效的唯一原因仍待实机确认。
+Changes in 0.5
+Correct non-TWS role encoding, EDR/3 Mbps MTU handling and HQ mode command.
+Start packets match CAF serialization across 72 input combinations.
 
-0.3 修复：加入 Qualcomm 0xFC0A Adaptive 单命令启动和停止处理；
-拒绝构建失败的空卸载参数，启动期间停止时不接受迟到的播放成功回调。
-当前仅实现非 TWS+ 的立体声路径；若控制器拒绝该命令会报告失败，不伪造成功。
+Installation
+Install the built module ZIP through Magisk and reboot.
+The installer validates component hashes, dependencies and SELinux labels.
+Build numbers are not used as a hard requirement.
+JAR/APK checks currently use whole-file hashes.
 
-适用范围
-仅 alioth、Android 17 / SDK 37。构建号不作为硬限制。
-本包必须匹配清单中已审计的系统组件、蓝牙 APK 和依赖库；不自动接受未知二进制文件。
-安装时逐一校验六个原始文件的 SHA-256 和 SELinux 标签；不匹配会中止。
-已在单台设备确认启动和Adaptive出声；其他设备、采样率及切换/重连仍待完整回归。
+Activation and recovery
+The module bind-mounts six files during boot without writing system partitions.
+Activation failures trigger rollback and disable the module.
+An unfinished boot leaves boot_pending; the next activation skips the overlays.
+To remove the module, disable or uninstall it in Magisk and reboot.
+For recovery, create /data/adb/modules/k40_pixelos_adaptive/disable from an
+environment with access to /data, then reboot.
 
-实现
-保留手机当前 DSP 固件及编码实现。增加 Adaptive R2 蓝牙协商、AIDL 到旧厂商接口的桥接、
-音频路由及当前版本 framework 的三处方法补丁。
-目标为 Adaptive 24-bit / 48 或 96 kHz；实际取决于耳机能力和运行时协商。
-普通编码设计为走现有 Bluetooth PCM 路径，尚未完成实机回归。
-模块以启动时 bind mount 覆盖六个文件，不改写系统分区。
-
-安装前提
-必须先有已安装到启动镜像且正常工作的 Magisk；仅安装 Magisk 应用不够。
-已确认环境使用 Magisk 31.1；请核对自己的系统组件。
-不要仅为安装本包而直接刷入不匹配的 boot/init_boot 镜像。
-该 ZIP 只支持通过 Magisk 应用安装，不支持 recovery 安装。
-
-已做检查
-相关 Android 组件已编译；32/64 位 host 的五项 AIDL 测试通过。
-当前手机版本的 JAR 补丁进行过反汇编对比和 ART 处理检查。
-音频 policy 通过模式验证；模块加载/回退/升级逻辑的十八项模拟测试通过。
-两个 ARM32 候选库的强导入符号在当前 ROM 的直接依赖中均可找到。
-这些检查不证明实机安全启动，也不证明 aptX Adaptive 播放成功。
-
-启动保护与回退
-检测到版本、文件、标签不匹配，消费者进程已启动，或挂载/属性设置失败时拒绝激活。
-可捕获的失败会尝试反向卸载本次挂载、恢复已改属性，并创建 disable。
-启动开始留下 boot_pending；启动完成后移除。下次启动若仍有标记，则跳过所有覆盖。
-正常开机后可在 Magisk 中停用模块并重启，恢复原始文件与启动属性。
-若无法开机，可从能访问 /data 的恢复环境创建：
-  /data/adb/modules/k40_pixelos_adaptive/disable
-然后重启。自动回退依赖 Magisk 能运行脚本，不是开机恢复的绝对保证。
-
-日志
-模块目录中的 boot.log；Magisk 的模块操作按钮可显示当前状态和日志末尾。
-自动判断系统开机完成不等于蓝牙或 Adaptive 播放已经验证。
+Logs
+See boot.log in the module directory or use the module action button.

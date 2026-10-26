@@ -1,18 +1,18 @@
-# 验证记录
+# Protocol changes and tests
 
-## 0.5 关键修正
+## Version 0.5
 
-- Qualcomm 单 VSC 启动报文按参考实际发送长度为 66 字节；仅修长度的 0.4 在设备上仍返回参数错误 `0x12`。
-- 非 TWS+ 角色字段为 0，不能填音频立体声枚举 2。
-- MTU 按非组播 996-byte payload、EDR 无 3 Mbps 时 663-byte payload 的限制处理，加 12 字节媒体头。
-- 启动后排队发送 HQ 模式命令 `13 01 05 02 00 10`。
-- 只依据控制器真实 ACK 报告成功；覆盖拒绝、短响应、迟到响应及停止期间的状态处理。
+- Uses the CAF single-VSC start packet's 66-byte wire length. Version 0.4 still received controller error `0x12` after the length fix alone.
+- Sets the non-TWS+ role field to 0, independently of the PCM stereo enumeration.
+- Caps non-multicast payload MTU at 996 bytes, or 663 bytes for EDR without 3 Mbps support, then adds the 12-byte media header.
+- Queues HQ mode command `13 01 05 02 00 10` after the start command.
+- Reports start success from controller ACKs and handles rejection, short responses, late responses and stop transitions.
 
-## 已有证据
+## Tests
 
-- 相关 Android 组件完成编译，32/64 位 AIDL host 测试通过。
-- 原实验执行 CAF 源码序列化语句，在 72 组输入上逐字节比对启动报文，并单独比对 HQ 模式命令。
-- 模块已加载；使用者确认 0.5 Adaptive 正常出声。
-- 仓库包含配置转换、ACK 状态机、控制器报文、加载回退及 archive identity 的 host 测试。
+- Android components compile, with AIDL host tests passing on both 32-bit and 64-bit hosts.
+- Differential tests execute CAF serialization statements across 72 start-packet input combinations and compare the HQ command separately.
+- Bundled host tests cover configuration conversion, the ACK state machine, controller packets, module activation and rollback, and archive content identity.
+- Version 0.5 boots and plays Adaptive audio on the target setup.
 
-CAF 参考并非 K40 固件的精确源码；源码字节比对不能独立证明固件兼容。原始日志未公开，设备验证为使用者报告。暂停/重连、长时间播放、96 kHz 和其他编码回归未全部确认。主机测试也不等于 SELinux、命名空间、开机或 DSP 实机验证。
+Additional device regression coverage: pause/resume, reconnection, extended playback, 96 kHz playback and switching to other codecs.
