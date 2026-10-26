@@ -1,0 +1,20 @@
+{
+  global:
+    bt_audio_pre_init;
+    audio_stream_open;
+    audio_stream_close;
+    audio_start_stream;
+    audio_stream_start;
+    audio_suspend_stream;
+    audio_stream_suspend;
+    audio_stop_stream;
+    audio_stream_stop;
+    audio_check_a2dp_ready;
+    clear_a2dpsuspend_flag;
+    audio_handoff_triggered;
+    audio_is_scrambling_enabled;
+    audio_get_codec_config;
+    audio_sink_get_a2dp_latency;
+    audio_get_a2dp_sink_latency;
+  local: *;
+};

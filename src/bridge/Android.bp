@@ -1,0 +1,59 @@
+cc_library_static {
+    name: "libk40_aptx_adaptive_config",
+    vendor_available: true,
+    host_supported: true,
+    srcs: ["adaptive_aidl.cpp", "adaptive_capabilities.cpp"],
+    export_include_dirs: ["."],
+    shared_libs: ["android.hardware.bluetooth.audio-V6-ndk", "libbinder_ndk"],
+    export_shared_lib_headers: ["android.hardware.bluetooth.audio-V6-ndk"],
+    cpp_std: "c++17",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_test_host {
+    name: "k40_adaptive_aidl_test",
+    srcs: ["adaptive_aidl_test.cpp"],
+    static_libs: ["libk40_aptx_adaptive_config"],
+    shared_libs: [
+        "android.hardware.bluetooth.audio-V6-ndk",
+        "libbinder_ndk",
+        "libbluetooth_audio_session_aidl",
+    ],
+    cpp_std: "c++17",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_library_static {
+    name: "libk40_aptx_adaptive_session",
+    vendor: true,
+    compile_multilib: "32",
+    srcs: ["adaptive_session.cpp"],
+    export_include_dirs: ["."],
+    static_libs: ["libk40_aptx_adaptive_config"],
+    shared_libs: [
+        "libbluetooth_audio_session_aidl",
+        "libbinder_ndk",
+        "libfmq",
+        "android.hardware.bluetooth.audio-V6-ndk",
+    ],
+    cpp_std: "c++17",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_library_shared {
+    name: "libk40_btaudio_offload_if",
+    vendor: true,
+    compile_multilib: "32",
+    srcs: ["legacy_exports.cpp"],
+    static_libs: ["libk40_aptx_adaptive_session", "libk40_aptx_adaptive_config"],
+    shared_libs: [
+        "libbase",
+        "libbluetooth_audio_session_aidl",
+        "android.hardware.bluetooth.audio-V6-ndk",
+        "libbinder_ndk",
+        "libfmq",
+    ],
+    version_script: "legacy_exports.map",
+    cpp_std: "c++17",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}

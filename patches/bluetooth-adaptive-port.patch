@@ -1,0 +1,2548 @@
+diff --git a/framework/java/android/bluetooth/BluetoothCodecType.java b/framework/java/android/bluetooth/BluetoothCodecType.java
+index dd63131..92860b4 100644
+--- a/framework/java/android/bluetooth/BluetoothCodecType.java
++++ b/framework/java/android/bluetooth/BluetoothCodecType.java
+@@ -82,6 +82,12 @@ public final class BluetoothCodecType implements Parcelable {
+     /** LHDC codec identifier. See {@link BluetoothCodecType#getCodecId}. */
+     public static final long CODEC_ID_LHDCV5 = 0x4c35_053a_ffL;
+ 
++    /**
++     * Qualcomm aptX Adaptive vendor codec identifier.
++     * @hide
++     */
++    public static final long CODEC_ID_APTX_ADAPTIVE = 0x00ad_00d7_ffL;
++
+     @Hide
+     @Retention(RetentionPolicy.SOURCE)
+     @LongDef({
+@@ -93,6 +99,7 @@ public final class BluetoothCodecType implements Parcelable {
+         CODEC_ID_SONY_LDAC,
+         CODEC_ID_OPUS,
+         CODEC_ID_LHDCV5,
++        CODEC_ID_APTX_ADAPTIVE,
+     })
+     public @interface CodecId {}
+ 
+@@ -285,6 +292,11 @@ public final class BluetoothCodecType implements Parcelable {
+             return new BluetoothCodecType(
+                     BluetoothCodecConfig.SOURCE_CODEC_TYPE_INVALID, CODEC_ID_LHDCV5, "LHDCV5");
+         }
++        if (codecId == CODEC_ID_APTX_ADAPTIVE) {
++            return new BluetoothCodecType(
++                    BluetoothCodecConfig.SOURCE_CODEC_TYPE_INVALID,
++                    CODEC_ID_APTX_ADAPTIVE, "aptX Adaptive");
++        }
+         return null;
+     }
+ 
+diff --git a/system/audio_hal_interface/a2dp_encoding.cc b/system/audio_hal_interface/a2dp_encoding.cc
+index 8791410..80707b9 100644
+--- a/system/audio_hal_interface/a2dp_encoding.cc
++++ b/system/audio_hal_interface/a2dp_encoding.cc
+@@ -15,10 +15,13 @@
+  */
+ 
+ #include "a2dp_encoding.h"
++#include "adaptive_support.h"
+ 
+ #include <vector>
+ 
+ #include "aidl/a2dp/a2dp_encoding_aidl.h"
++#include "aidl/a2dp/codec_status_aidl.h"
++#include "osi/include/properties.h"
+ #include "hal_version_manager.h"
+ #include "hardware/bt_av.h"
+ #include "hidl/a2dp_encoding_hidl.h"
+@@ -196,6 +199,12 @@ bool is_opus_supported() {
+   return false;
+ }
+ 
++bool is_aptx_adaptive_supported() {
++  return HalVersionManager::GetHalTransport() == BluetoothAudioHalTransport::AIDL &&
++         !osi_property_get_bool("persist.bluetooth.a2dp_offload.disabled", false) &&
++         aidl::a2dp::codec::IsAptxAdaptiveSupported();
++}
++
+ namespace provider {
+ 
+ // Lookup the codec info in the list of supported offloaded sink codecs.
+diff --git a/system/audio_hal_interface/a2dp_encoding_host.cc b/system/audio_hal_interface/a2dp_encoding_host.cc
+index e94c451..e7afc12 100644
+--- a/system/audio_hal_interface/a2dp_encoding_host.cc
++++ b/system/audio_hal_interface/a2dp_encoding_host.cc
+@@ -343,6 +343,9 @@ void flush_source() {}
+ // Check if OPUS codec is supported
+ bool is_opus_supported() { return true; }
+ 
++// The host backend cannot supply the Qualcomm DSP-only encoder.
++bool is_aptx_adaptive_supported() { return false; }
++
+ namespace provider {
+ 
+ // Lookup the codec info in the list of supported offloaded sink codecs.
+diff --git a/system/audio_hal_interface/adaptive_support.h b/system/audio_hal_interface/adaptive_support.h
+new file mode 100644
+index 0000000..b143d2b
+--- /dev/null
++++ b/system/audio_hal_interface/adaptive_support.h
+@@ -0,0 +1,6 @@
++#pragma once
++
++namespace bluetooth::audio::a2dp {
++// Adaptive has no software encoder; require the matching AIDL DSP capability.
++bool is_aptx_adaptive_supported();
++}  // namespace bluetooth::audio::a2dp
+diff --git a/system/audio_hal_interface/aidl/a2dp/a2dp_provider_info_unittest.cc b/system/audio_hal_interface/aidl/a2dp/a2dp_provider_info_unittest.cc
+index 5ac015c..44efc35 100644
+--- a/system/audio_hal_interface/aidl/a2dp/a2dp_provider_info_unittest.cc
++++ b/system/audio_hal_interface/aidl/a2dp/a2dp_provider_info_unittest.cc
+@@ -476,7 +476,7 @@ TEST_F(ProviderInfoTest, TestSupportsCodec) {
+ TEST_F(ProviderInfoTest, TestCodecCapabilitiesSbc) {
+   GetProviderInfoForTesting(true, false);
+ 
+-  uint8_t result_codec_info[20];
++  uint8_t result_codec_info[AVDT_CODEC_SIZE];
+   btav_a2dp_codec_config_t result_codec_config;
+   bluetooth::a2dp::CodecId result_codec_id;
+ 
+@@ -497,7 +497,7 @@ TEST_F(ProviderInfoTest, TestCodecCapabilitiesSbc) {
+ TEST_F(ProviderInfoTest, TestCodecCapabilitiesAac) {
+   GetProviderInfoForTesting(true, false);
+ 
+-  uint8_t result_codec_info[20];
++  uint8_t result_codec_info[AVDT_CODEC_SIZE];
+   btav_a2dp_codec_config_t result_codec_config;
+   bluetooth::a2dp::CodecId result_codec_id;
+ 
+@@ -518,7 +518,7 @@ TEST_F(ProviderInfoTest, TestCodecCapabilitiesAac) {
+ TEST_F(ProviderInfoTest, TestCodecCapabilitiesOpus) {
+   GetProviderInfoForTesting(true, false);
+ 
+-  uint8_t result_codec_info[20];
++  uint8_t result_codec_info[AVDT_CODEC_SIZE];
+   btav_a2dp_codec_config_t result_codec_config;
+   bluetooth::a2dp::CodecId result_codec_id;
+ 
+@@ -540,7 +540,7 @@ TEST_F(ProviderInfoTest, TestCodecCapabilitiesOpus) {
+ TEST_F(ProviderInfoTest, TestCodecCapabilitiesFoobar) {
+   GetProviderInfoForTesting(true, false);
+ 
+-  uint8_t result_codec_info[20];
++  uint8_t result_codec_info[AVDT_CODEC_SIZE];
+   btav_a2dp_codec_config_t result_codec_config;
+   bluetooth::a2dp::CodecId result_codec_id;
+ 
+diff --git a/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.cc b/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.cc
+index d57a886..eda07d0 100644
+--- a/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.cc
++++ b/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.cc
+@@ -19,6 +19,7 @@
+ #include "codec_status_aidl.h"
+ 
+ #include <bluetooth/log.h>
++#include <algorithm>
+ 
+ #include <unordered_set>
+ #include <vector>
+@@ -29,6 +30,7 @@
+ #include "stack/include/a2dp_sbc_constants.h"
+ #include "stack/include/a2dp_vendor_aptx_constants.h"
+ #include "stack/include/a2dp_vendor_aptx_hd_constants.h"
++#include "stack/include/a2dp_vendor_aptx_adaptive.h"
+ #include "stack/include/a2dp_vendor_ldac_constants.h"
+ 
+ namespace bluetooth::audio::aidl::a2dp::codec {
+@@ -38,6 +40,10 @@ using ::aidl::android::hardware::bluetooth::audio::AacConfiguration;
+ using ::aidl::android::hardware::bluetooth::audio::AacObjectType;
+ using ::aidl::android::hardware::bluetooth::audio::AptxCapabilities;
+ using ::aidl::android::hardware::bluetooth::audio::AptxConfiguration;
++using ::aidl::android::hardware::bluetooth::audio::AptxAdaptiveConfiguration;
++using ::aidl::android::hardware::bluetooth::audio::AptxAdaptiveChannelMode;
++using ::aidl::android::hardware::bluetooth::audio::AptxAdaptiveInputMode;
++using ::aidl::android::hardware::bluetooth::audio::AptxMode;
+ using ::aidl::android::hardware::bluetooth::audio::AudioCapabilities;
+ using ::aidl::android::hardware::bluetooth::audio::ChannelMode;
+ using ::aidl::android::hardware::bluetooth::audio::CodecCapabilities;
+@@ -231,6 +237,26 @@ bool IsCodecOffloadingEnabled(const CodecConfiguration& codec_config) {
+         auto ldac_config = codec_config.config.get<CodecConfiguration::CodecSpecific::ldacConfig>();
+         return ldac_offloading_capability_match(ldac_capability, ldac_config);
+       }
++      case CodecType::APTX_ADAPTIVE: {
++        if (codec_capability.capabilities.getTag() !=
++                CodecCapabilities::Capabilities::aptxAdaptiveCapabilities ||
++            codec_config.config.getTag() != CodecConfiguration::CodecSpecific::aptxAdaptiveConfig) {
++          return false;
++        }
++        const auto& caps = codec_capability.capabilities
++            .get<CodecCapabilities::Capabilities::aptxAdaptiveCapabilities>();
++        const auto& value = codec_config.config
++            .get<CodecConfiguration::CodecSpecific::aptxAdaptiveConfig>();
++        const auto contains = [](const auto& values, auto selected) {
++          return std::find(values.begin(), values.end(), selected) != values.end();
++        };
++        return contains(caps.sampleRateHz, value.sampleRateHz) &&
++               contains(caps.bitsPerSample, value.bitsPerSample) &&
++               contains(caps.channelMode, value.channelMode) &&
++               contains(caps.aptxMode, value.aptxMode) &&
++               value.inputMode == AptxAdaptiveInputMode::STEREO &&
++               value.aptxAdaptiveConfigStream.size() == 11;
++      }
+       case CodecType::OPUS: {
+         std::optional<OpusCapabilities> opus_capability =
+                 codec_capability.capabilities
+@@ -250,6 +276,53 @@ bool IsCodecOffloadingEnabled(const CodecConfiguration& codec_config) {
+   return false;
+ }
+ 
++bool A2dpAdaptiveToHalConfig(const ahal_codec_configuration& config, CodecConfiguration* result) {
++  if (config.codec_config.codec_type != BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE) return false;
++  tA2DP_APTX_ADAPTIVE_CIE negotiated{};
++  const auto* bytes = config.codec_specific_information_elements;
++  static_assert(AVDT_CODEC_SIZE >= A2DP_APTX_ADAPTIVE_CODEC_LEN + 1);
++  if (!A2DP_GetAptxAdaptiveCIE(bytes, &negotiated)) return false;
++  AptxAdaptiveConfiguration value{};
++  value.sampleRateHz = A2dpCodecToHalSampleRate(config.codec_config);
++  value.bitsPerSample = A2dpCodecToHalBitsPerSample(config.codec_config);
++  if ((value.sampleRateHz != 48000 && value.sampleRateHz != 96000) ||
++      value.bitsPerSample != 24 ||
++      A2DP_VendorGetTrackSampleRateAptxAdaptive(bytes) != value.sampleRateHz) return false;
++  // Match Qualcomm's AIDL mapping: the audio input is mono or joint stereo;
++  // TWS transport details remain in the negotiated sink capability stream.
++  switch (config.codec_config.channel_mode) {
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_MONO:
++      value.channelMode = AptxAdaptiveChannelMode::MONO;
++      break;
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO:
++      value.channelMode = AptxAdaptiveChannelMode::JOINT_STEREO;
++      break;
++    default:
++      return false;
++  }
++  value.aptxMode = AptxMode::HIGH_QUALITY;
++  value.sinkBufferingMs = {20, 50, 20, 50, 20, 50};
++  const auto& data = negotiated.aptx_data;
++  value.ttp = {static_cast<int8_t>(static_cast<int>(data.ttp_ll_0) - 128),
++               static_cast<int8_t>(static_cast<int>(data.ttp_ll_1) - 128),
++               static_cast<int8_t>(static_cast<int>(data.ttp_hq_0) - 128),
++               static_cast<int8_t>(static_cast<int>(data.ttp_hq_1) - 128),
++               static_cast<int8_t>(static_cast<int>(data.ttp_tws_0) - 128),
++               static_cast<int8_t>(static_cast<int>(data.ttp_tws_1) - 128)};
++  value.inputMode = AptxAdaptiveInputMode::STEREO;
++  value.inputFadeDurationMs = 255;
++  const uint32_t features = data.aptx_adaptive_sup_features;
++  value.aptxAdaptiveConfigStream = {
++      data.cap_ext_ver_num, static_cast<uint8_t>(features),
++      static_cast<uint8_t>(features >> 8), static_cast<uint8_t>(features >> 16),
++      static_cast<uint8_t>(features >> 24), data.first_setup_pref,
++      data.second_setup_pref, data.third_setup_pref, data.fourth_setup_pref,
++      data.eoc0, data.eoc1};
++  result->codecType = CodecType::APTX_ADAPTIVE;
++  result->config.set<CodecConfiguration::CodecSpecific::aptxAdaptiveConfig>(value);
++  return true;
++}
++
+ bool A2dpSbcToHalConfig(const ahal_codec_configuration& config, CodecConfiguration* codec_config) {
+   if (config.codec_config.codec_type != BTAV_A2DP_CODEC_INDEX_SOURCE_SBC &&
+       config.codec_config.codec_type != BTAV_A2DP_CODEC_INDEX_SINK_SBC) {
+@@ -538,6 +611,9 @@ bool UpdateOffloadingCapabilities(
+   audio_hal_capabilities = BluetoothAudioClientInterface::GetAudioCapabilities(
+           SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH);
+   std::unordered_set<CodecType> codec_type_set;
++  // The legacy AudioManager format list has no Adaptive entry. The matching
++  // module's explicit HAL capability authorizes this DSP-only codec instead.
++  codec_type_set.insert(CodecType::APTX_ADAPTIVE);
+   for (auto preference : framework_preference) {
+     switch (preference.codec_type) {
+       case BTAV_A2DP_CODEC_INDEX_SOURCE_SBC:
+@@ -600,11 +676,26 @@ bool UpdateOffloadingCapabilities(
+   return true;
+ }
+ 
++bool IsAptxAdaptiveSupported() {
++  for (const auto& capability : offloading_preference) {
++    if (capability.getTag() != AudioCapabilities::a2dpCapabilities) continue;
++    const auto& codec = capability.get<AudioCapabilities::a2dpCapabilities>();
++    if (codec.codecType == CodecType::APTX_ADAPTIVE &&
++        codec.capabilities.getTag() == CodecCapabilities::Capabilities::aptxAdaptiveCapabilities) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ bool getHalPcmConfiguration(const ahal_codec_configuration& config,
+                             PcmConfiguration* pcm_configuration) {
+   if (pcm_configuration == nullptr) {
+     return false;
+   }
++  // No CPU encoder exists for this port. A failed offload must not be treated
++  // as a valid software PCM encoding session.
++  if (config.codec_config.codec_type == BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE) return false;
+ 
+   pcm_configuration->sampleRateHz = A2dpCodecToHalSampleRate(config.codec_config);
+   pcm_configuration->bitsPerSample = A2dpCodecToHalBitsPerSample(config.codec_config);
+@@ -644,6 +735,10 @@ bool getHalCodecConfiguration(const ahal_codec_configuration& config,
+       return A2dpLdacToHalConfig(config, codec_configuration) &&
+              IsCodecOffloadingEnabled(*codec_configuration);
+ 
++    case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE:
++      return A2dpAdaptiveToHalConfig(config, codec_configuration) &&
++             IsCodecOffloadingEnabled(*codec_configuration);
++
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_OPUS:
+       return A2dpOpusToHalConfig(config, codec_configuration) &&
+              IsCodecOffloadingEnabled(*codec_configuration);
+diff --git a/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.h b/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.h
+index 66f5a84..2a486d0 100644
+--- a/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.h
++++ b/system/audio_hal_interface/aidl/a2dp/codec_status_aidl.h
+@@ -33,6 +33,8 @@ using ::bluetooth::audio::a2dp::ahal_codec_configuration;
+ bool UpdateOffloadingCapabilities(
+         const std::vector<btav_a2dp_codec_config_t>& framework_preference);
+ 
++bool IsAptxAdaptiveSupported();
++
+ /// Return the pcm configuration to be used for the software encoding audio
+ /// session with the Bluetooth Audio HAL. Returns false if the
+ /// negotiated codec capabilities are not supported by the
+diff --git a/system/bta/av/bta_av_aact.cc b/system/bta/av/bta_av_aact.cc
+index 536cb0d..f559cf9 100644
+--- a/system/bta/av/bta_av_aact.cc
++++ b/system/bta/av/bta_av_aact.cc
+@@ -38,6 +38,7 @@
+ #include <vector>
+ 
+ #include "bta/av/bta_av_int.h"
++#include "bta/av/qcom_adaptive_offload.h"
+ #include "bta/include/bta_av_co.h"
+ #include "bta_av_api.h"
+ #include "bta_sys.h"
+@@ -115,7 +116,7 @@ constexpr char kBtmLogTag[] = "A2DP";
+ #define BTA_AV_A2DP_OFFLOAD_XMIT_QUOTA 4
+ 
+ static void bta_av_accept_open_timer_cback(void* data);
+-static void bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p_a2dp_offload);
++static bool bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p_a2dp_offload);
+ 
+ /* state machine states */
+ enum {
+@@ -3012,6 +3013,88 @@ void bta_av_open_at_inc(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
+   }
+ }
+ 
++namespace {
++enum class QcomOffloadState { Idle, Starting, Started, Stopping, Failed };
++QcomOffloadState qcom_state = QcomOffloadState::Idle;
++tBTA_AV_HNDL qcom_handle = BTA_AV_INVALID_HANDLE;
++
++void qcom_offload_callback(tBTM_VSC_CMPL* result) {
++  const bool valid = result && result->param_len >= 2;
++  const uint8_t status = valid ? result->p_param_buf[0] : 0xff;
++  const uint8_t command = valid ? result->p_param_buf[1] : 0;
++  log::info("K40 Qualcomm offload response command={:#x} status={:#x} state={}",
++            command, status, static_cast<int>(qcom_state));
++  if (qcom_state == QcomOffloadState::Stopping && valid && command == k40::kStart) {
++    // Stop was queued while start was in flight; do not acknowledge playback.
++    return;
++  }
++  if (qcom_state == QcomOffloadState::Stopping) {
++    qcom_state = valid && command == k40::kStop && status == 0
++                         ? QcomOffloadState::Idle : QcomOffloadState::Failed;
++    qcom_handle = BTA_AV_INVALID_HANDLE;
++    return;
++  }
++  if (qcom_state != QcomOffloadState::Starting) return;
++  const bool success = valid && command == k40::kStart && status == 0;
++  if (bta_av_cb.offload_start_pending_hndl != qcom_handle) {
++    qcom_state = QcomOffloadState::Failed;
++    return;
++  }
++  bta_av_cb.offload_start_pending_hndl = BTA_AV_INVALID_HANDLE;
++  // A positive rejection for invalid/unsupported parameters did not start
++  // transport. Allow a later corrected request; ambiguous replies quarantine.
++  const bool rejected = valid && command == k40::kStart &&
++                        (status == 0x01 || status == 0x11 || status == 0x12);
++  qcom_state = success ? QcomOffloadState::Started
++                      : rejected ? QcomOffloadState::Idle : QcomOffloadState::Failed;
++  if (success) bta_av_cb.offload_started_hndl = qcom_handle;
++  tBTA_AV response{};
++  response.status = success ? BTA_AV_SUCCESS : BTA_AV_FAIL_RESOURCES;
++  (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &response);
++}
++
++void qcom_adaptive_start(tBTA_AV_SCB* scb) {
++  uint16_t cid = 0;
++  const uint16_t acl = get_btm_client_interface().peer.BTM_GetHCIConnHandle(
++          scb->PeerAddress(), BT_TRANSPORT_BR_EDR);
++  const auto cp = scb->p_cos->get_scmst_info(scb->PeerAddress());
++  const uint16_t mtu = k40::TransportMtu(
++          scb->stream_mtu, btif_av_is_peer_edr(scb->PeerAddress(), A2dpType::kSource),
++          btif_av_peer_supports_3mbps(scb->PeerAddress(), A2dpType::kSource));
++  const int rate = A2DP_GetTrackSampleRate(scb->cfg.codec_info);
++  const bool channel_ok = stack::l2cap::get_interface().L2CA_GetRemoteChannelId(scb->l2c_cid, &cid);
++  const auto packet = k40::BuildStart(rate, acl, cid, mtu,
++                                    cp.enable_status, cp.cp_header, scb->cfg.codec_info,
++                                    AVDT_CODEC_SIZE);
++  if (qcom_state != QcomOffloadState::Idle || !channel_ok || !packet ||
++      A2DP_GetTrackChannelCount(scb->cfg.codec_info) != 2) {
++    log::error("K40 offload rejected: state={} rate={} ACL={} CID={} MTU={}",
++               static_cast<int>(qcom_state), rate, acl, cid, mtu);
++    tBTA_AV response{};
++    response.status = BTA_AV_FAIL_RESOURCES;
++    (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &response);
++    return;
++  }
++  auto bytes = *packet;
++  qcom_handle = scb->hndl;
++  qcom_state = QcomOffloadState::Starting;
++  bta_av_cb.offload_start_pending_hndl = scb->hndl;
++  bta_av_cb.offload_start_v2 = false;
++  log::info("K40 Qualcomm Adaptive start: rate={} ACL={} CID={} MTU={} bytes={}",
++            rate, acl, cid, mtu, bytes.size());
++  get_btm_client_interface().vendor.BTM_VendorSpecificCommand(
++          k40::kOpcode, bytes.size(), bytes.data(), qcom_offload_callback);
++  // CAF queues encoder mode after single-VSC start. Keep HIGH_QUALITY in
++  // sync with codec_status_aidl.cc and the DSP bridge's selected profile.
++  auto mode = k40::kHighQualityMode;
++  get_btm_client_interface().vendor.BTM_VendorSpecificCommand(
++          k40::kOpcode, mode.size(), mode.data(), [](tBTM_VSC_CMPL* result) {
++            const int status = result && result->param_len >= 1 ? result->p_param_buf[0] : -1;
++            log::info("K40 Qualcomm HQ mode response status={}", status);
++          });
++}
++} // namespace
++
+ static void offload_vendor_callback(tBTM_VSC_CMPL* param) {
+   tBTA_AV value{0};
+   uint8_t sub_opcode = 0;
+@@ -3131,6 +3214,15 @@ static void bta_av_vendor_offload_start_v2(tBTA_AV_SCB* p_scb, A2dpCodecConfigEx
+ }
+ 
+ void bta_av_vendor_offload_stop() {
++  if (qcom_state != QcomOffloadState::Idle) {
++    if (qcom_state != QcomOffloadState::Stopping) {
++      qcom_state = QcomOffloadState::Stopping;
++      uint8_t stop[] = {k40::kStop, 0};
++      get_btm_client_interface().vendor.BTM_VendorSpecificCommand(
++              k40::kOpcode, sizeof(stop), stop, qcom_offload_callback);
++    }
++    return;
++  }
+   uint8_t param[255];
+   uint8_t* p_param = param;
+ 
+@@ -3178,7 +3270,7 @@ void bta_av_vendor_offload_stop() {
+  ******************************************************************************/
+ void bta_av_offload_req(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* /*p_data*/) {
+   tBTA_AV bta_av_data = {};
+-  tBT_A2DP_OFFLOAD offload_start;
++  tBT_A2DP_OFFLOAD offload_start{};
+   log::debug("stream {}, audio channels open {}", p_scb->started ? "STARTED" : "STOPPED",
+              bta_av_cb.audio_open_cnt);
+ 
+@@ -3200,11 +3292,17 @@ void bta_av_offload_req(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* /*p_data*/) {
+     return;
+   }
+ 
+-  if (codec_config->isHardwareProviderCodec()) {
++  if (A2DP_SourceCodecIndex(p_scb->cfg.codec_info) == BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE) {
++    qcom_adaptive_start(p_scb);
++  } else if (codec_config->isHardwareProviderCodec()) {
+     bta_av_vendor_offload_start_v2(p_scb, static_cast<A2dpCodecConfigExt*>(codec_config));
+   } else {
+-    bta_av_offload_codec_builder(p_scb, &offload_start);
+-    bta_av_vendor_offload_start(p_scb, &offload_start);
++    if (bta_av_offload_codec_builder(p_scb, &offload_start)) {
++      bta_av_vendor_offload_start(p_scb, &offload_start);
++    } else {
++      bta_av_data.status = BTA_AV_FAIL_RESOURCES;
++      (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &bta_av_data);
++    }
+   }
+ }
+ 
+@@ -3235,7 +3333,7 @@ void bta_av_offload_rsp(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
+   (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &bta_av_data);
+ }
+ 
+-static void bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p_a2dp_offload) {
++static bool bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p_a2dp_offload) {
+   A2dpCodecConfig* CodecConfig = bta_av_get_a2dp_current_codec();
+   btav_a2dp_codec_index_t codec_index = A2DP_SourceCodecIndex(p_scb->cfg.codec_info);
+   uint32_t codec_type = 0;
+@@ -3266,7 +3364,7 @@ static void bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p
+       break;
+     default:
+       log::error("Unknown Codec type");
+-      return;
++      return false;
+   }
+   if (mtu > MAX_3MBPS_AVDTP_MTU) {
+     mtu = MAX_3MBPS_AVDTP_MTU;
+@@ -3299,7 +3397,7 @@ static void bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p
+   if (stack::l2cap::get_interface().L2CA_GetRemoteChannelId(p_scb->l2c_cid,
+                                                             &p_a2dp_offload->l2c_rcid) == false) {
+     log::error("Failed to fetch l2c rcid");
+-    return;
++    return false;
+   }
+   switch (CodecConfig->getAudioBitsPerSample()) {
+     case 16:
+@@ -3316,7 +3414,9 @@ static void bta_av_offload_codec_builder(tBTA_AV_SCB* p_scb, tBT_A2DP_OFFLOAD* p
+   p_a2dp_offload->encoded_audio_bitrate = CodecConfig->getTrackBitRate();
+   if (!CodecConfig->getCodecSpecificConfig(p_a2dp_offload)) {
+     log::error("not a valid codec info");
++    return false;
+   }
++  return true;
+ }
+ void bta_av_api_set_peer_sep(tBTA_AV_DATA* p_data) {
+   log::debug("bd_addr={}, sep:{}", p_data->peer_sep.addr, p_data->peer_sep.sep);
+diff --git a/system/bta/av/qcom_adaptive_offload.h b/system/bta/av/qcom_adaptive_offload.h
+new file mode 100644
+index 0000000..f0ed61f
+--- /dev/null
++++ b/system/bta/av/qcom_adaptive_offload.h
+@@ -0,0 +1,45 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++#pragma once
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <optional>
++
++namespace bluetooth::k40 {
++// Qualcomm CAF bta/av/bta_av_int.h and bta_av_vendor_offload_start.
++// Non-TWS Adaptive, Slimbus, single stream. Not the Android 0xFD5D ABI.
++constexpr uint16_t kOpcode = 0xfc0a;
++constexpr uint8_t kStart = 0x0a;
++constexpr uint8_t kStop = 0x05;
++// CAF passes param_len=21+AVDT_CODEC_SIZE (66), although its temporary
++// buffer contains one more padding byte. Preserve that actual wire ABI.
++using StartPacket = std::array<uint8_t, 66>;
++// CAF uses a zero-initialized SCB role for ordinary (non-TWS+) headphones.
++// This byte is not the PCM stereo channel count.
++constexpr std::array<uint8_t, 6> kHighQualityMode{0x13, 1, 5, 2, 0, 0x10};
++inline uint16_t TransportMtu(uint16_t stream_mtu, bool edr, bool edr_3mbps) {
++  uint16_t payload = stream_mtu > 996 ? 996 : stream_mtu;
++  if (edr && !edr_3mbps && payload > 663) payload = 663;
++  return payload == 0 ? 0 : payload + 12;
++}
++inline std::optional<StartPacket> BuildStart(
++        uint32_t rate, uint16_t acl, uint16_t cid, uint16_t mtu,
++        uint8_t cp_active, uint8_t cp_flag, const uint8_t* codec, size_t codec_size) {
++  if ((rate != 48000 && rate != 96000) || acl > 0x0eff || cid < 0x40 ||
++      mtu < 12 || codec_size != 45 || codec == nullptr || codec[0] < 9 ||
++      static_cast<size_t>(codec[0]) + 1 > 44 || codec[44] != 0 || cp_active > 1) return std::nullopt;
++  StartPacket out{};
++  size_t n = 0;
++  auto byte = [&](uint8_t value) { out[n++] = value; };
++  auto word = [&](uint16_t value) { byte(value & 0xff); byte(value >> 8); };
++  byte(kStart); byte(10); byte(0); byte(10); // codec, Slimbus, stream type
++  byte(0); byte(0); byte(0); // device, max latency, delay reporting
++  byte(cp_active); byte(cp_flag);
++  word(rate == 48000 ? 2 : 8);
++  word(acl); word(cid); word(mtu);
++  byte(1); byte(0); byte(0); // start, no split ACL, default non-TWS+ role
++  word(150); // CAF time to play
++  for (size_t i = 0; i < 44; ++i) byte(codec[i]);
++  return out;
++}
++} // namespace bluetooth::k40
+diff --git a/system/btif/src/btif_a2dp_source.cc b/system/btif/src/btif_a2dp_source.cc
+index d9a1402..c891ce8 100644
+--- a/system/btif/src/btif_a2dp_source.cc
++++ b/system/btif/src/btif_a2dp_source.cc
+@@ -554,7 +554,11 @@ static void btif_a2dp_source_start_session_delayed(const RawAddress& peer_addres
+ 
+     log::debug("{}", config.ToString());
+ 
+-    bluetooth::audio::a2dp::setup_codec(config);
++    if (!bluetooth::audio::a2dp::setup_codec(config)) {
++      log::error("Cannot stream audio: HAL rejected codec configuration");
++      peer_ready_promise.set_value();
++      return;
++    }
+   }
+ 
+   if (btif_a2dp_source_cb.State() != BtifA2dpSource::kStateRunning) {
+diff --git a/system/include/hardware/bt_av.h b/system/include/hardware/bt_av.h
+index 8d0c37a..0e1f451 100644
+--- a/system/include/hardware/bt_av.h
++++ b/system/include/hardware/bt_av.h
+@@ -64,6 +64,7 @@ typedef enum {
+   BTAV_A2DP_CODEC_INDEX_SOURCE_LC3,
+   BTAV_A2DP_CODEC_INDEX_SOURCE_OPUS,
+   BTAV_A2DP_CODEC_INDEX_SOURCE_LHDCV5,
++  BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE,
+ 
+   BTAV_A2DP_CODEC_INDEX_SOURCE_MAX,
+ 
+@@ -205,6 +206,8 @@ struct btav_a2dp_codec_config_t {
+         return "LDAC";
+       case BTAV_A2DP_CODEC_INDEX_SOURCE_LHDCV5:
+         return "LHDC";
++      case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE:
++        return "aptX Adaptive";
+       case BTAV_A2DP_CODEC_INDEX_SINK_SBC:
+         return "SBC (Sink)";
+       case BTAV_A2DP_CODEC_INDEX_SINK_AAC:
+@@ -300,7 +303,7 @@ typedef struct {
+ typedef struct {
+   ::bluetooth::a2dp::CodecId codec_id;
+   std::string name;
+-  uint8_t media_codec_capabilites[20];
++  uint8_t media_codec_capabilites[AVDT_CODEC_SIZE];
+   btav_a2dp_codec_config_t codec_capabilities;
+   bool lossless;
+ 
+diff --git a/system/stack/Android.bp b/system/stack/Android.bp
+index 512ca1a..5c34860 100644
+--- a/system/stack/Android.bp
++++ b/system/stack/Android.bp
+@@ -80,6 +80,7 @@ cc_library_static {
+         "a2dp/a2dp_vendor_aptx.cc",
+         "a2dp/a2dp_vendor_aptx_encoder.cc",
+         "a2dp/a2dp_vendor_aptx_hd.cc",
++        "a2dp/a2dp_vendor_aptx_adaptive.cc",
+         "a2dp/a2dp_vendor_aptx_hd_encoder.cc",
+         "a2dp/a2dp_vendor_ldac.cc",
+         "a2dp/a2dp_vendor_ldac_encoder.cc",
+@@ -1262,6 +1263,7 @@ cc_test {
+         "a2dp/a2dp_vendor_aptx.cc",
+         "a2dp/a2dp_vendor_aptx_encoder.cc",
+         "a2dp/a2dp_vendor_aptx_hd.cc",
++        "a2dp/a2dp_vendor_aptx_adaptive.cc",
+         "a2dp/a2dp_vendor_aptx_hd_encoder.cc",
+         "a2dp/a2dp_vendor_ldac.cc",
+         "a2dp/a2dp_vendor_ldac_encoder.cc",
+diff --git a/system/stack/a2dp/a2dp_codec_config.cc b/system/stack/a2dp/a2dp_codec_config.cc
+index 101762d..f072367 100644
+--- a/system/stack/a2dp/a2dp_codec_config.cc
++++ b/system/stack/a2dp/a2dp_codec_config.cc
+@@ -37,6 +37,7 @@
+ 
+ #include "device/include/device_iot_conf_defs.h"
+ #include "hardware/bt_av.h"
++#include "stack/include/a2dp_vendor_aptx_adaptive.h"
+ #include "stack/include/a2dp_aac.h"
+ #include "stack/include/a2dp_codec_api.h"
+ #include "stack/include/a2dp_constants.h"
+@@ -110,6 +111,8 @@ std::string CodecIdToString(CodecId codec_id) {
+       return "APTX";
+     case CodecId::APTX_HD:
+       return "APTX_HD";
++    case CodecId::APTX_ADAPTIVE:
++      return "APTX_ADAPTIVE";
+     case CodecId::LDAC:
+       return "LDAC";
+     case CodecId::OPUS:
+@@ -210,6 +213,9 @@ A2dpCodecConfig* A2dpCodecConfig::createCodec(btav_a2dp_codec_index_t codec_inde
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_HD:
+       codec_config = new A2dpCodecConfigAptxHd(codec_priority);
+       break;
++    case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE:
++      codec_config = new A2dpCodecConfigAptxAdaptive(codec_priority);
++      break;
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_LDAC:
+       codec_config = new A2dpCodecConfigLdacSource(codec_priority);
+       break;
+@@ -1210,6 +1216,8 @@ const char* A2DP_CodecName(const uint8_t* p_codec_info) {
+       return "aptX";
+     case CodecId::APTX_HD:
+       return "aptX-HD";
++    case CodecId::APTX_ADAPTIVE:
++      return "aptX Adaptive";
+     case CodecId::LDAC:
+       return "LDAC";
+     case CodecId::OPUS:
+@@ -1264,6 +1272,8 @@ bool A2DP_CodecEquals(const uint8_t* p_codec_info_a, const uint8_t* p_codec_info
+       return A2DP_VendorCodecEqualsAptx(p_codec_info_a, p_codec_info_b);
+     case bluetooth::a2dp::CodecId::APTX_HD:
+       return A2DP_VendorCodecEqualsAptxHd(p_codec_info_a, p_codec_info_b);
++    case bluetooth::a2dp::CodecId::APTX_ADAPTIVE:
++      return A2DP_VendorCodecEqualsAptxAdaptive(p_codec_info_a, p_codec_info_b);
+     case bluetooth::a2dp::CodecId::LDAC:
+       return A2DP_VendorCodecEqualsLdac(p_codec_info_a, p_codec_info_b);
+     case bluetooth::a2dp::CodecId::OPUS:
+@@ -1296,6 +1306,8 @@ int A2DP_GetTrackSampleRate(const uint8_t* p_codec_info) {
+       return A2DP_VendorGetTrackSampleRateAptx(p_codec_info);
+     case bluetooth::a2dp::CodecId::APTX_HD:
+       return A2DP_VendorGetTrackSampleRateAptxHd(p_codec_info);
++    case bluetooth::a2dp::CodecId::APTX_ADAPTIVE:
++      return A2DP_VendorGetTrackSampleRateAptxAdaptive(p_codec_info);
+     case bluetooth::a2dp::CodecId::LDAC:
+       return A2DP_VendorGetTrackSampleRateLdac(p_codec_info);
+     case bluetooth::a2dp::CodecId::OPUS:
+@@ -1328,6 +1340,8 @@ int A2DP_GetTrackBitsPerSample(const uint8_t* p_codec_info) {
+       return A2DP_VendorGetTrackBitsPerSampleAptx(p_codec_info);
+     case bluetooth::a2dp::CodecId::APTX_HD:
+       return A2DP_VendorGetTrackBitsPerSampleAptxHd(p_codec_info);
++    case bluetooth::a2dp::CodecId::APTX_ADAPTIVE:
++      return A2DP_VendorGetTrackBitsPerSampleAptxAdaptive(p_codec_info);
+     case bluetooth::a2dp::CodecId::LDAC:
+       return A2DP_VendorGetTrackBitsPerSampleLdac(p_codec_info);
+     case bluetooth::a2dp::CodecId::OPUS:
+@@ -1360,6 +1374,8 @@ int A2DP_GetTrackChannelCount(const uint8_t* p_codec_info) {
+       return A2DP_VendorGetTrackChannelCountAptx(p_codec_info);
+     case bluetooth::a2dp::CodecId::APTX_HD:
+       return A2DP_VendorGetTrackChannelCountAptxHd(p_codec_info);
++    case bluetooth::a2dp::CodecId::APTX_ADAPTIVE:
++      return A2DP_VendorGetTrackChannelCountAptxAdaptive(p_codec_info);
+     case bluetooth::a2dp::CodecId::LDAC:
+       return A2DP_VendorGetTrackChannelCountLdac(p_codec_info);
+     case bluetooth::a2dp::CodecId::OPUS:
+@@ -1413,6 +1429,8 @@ bool A2DP_GetPacketTimestamp(const uint8_t* p_codec_info, const uint8_t* p_data,
+       return A2DP_VendorGetPacketTimestampAptx(p_codec_info, p_data, p_timestamp);
+     case bluetooth::a2dp::CodecId::APTX_HD:
+       return A2DP_VendorGetPacketTimestampAptxHd(p_codec_info, p_data, p_timestamp);
++    case bluetooth::a2dp::CodecId::APTX_ADAPTIVE:
++      return A2DP_VendorGetPacketTimestampAptxAdaptive(p_codec_info, p_data, p_timestamp);
+     case bluetooth::a2dp::CodecId::LDAC:
+       return A2DP_VendorGetPacketTimestampLdac(p_codec_info, p_data, p_timestamp);
+     case bluetooth::a2dp::CodecId::OPUS:
+@@ -1586,6 +1604,8 @@ const char* A2DP_CodecIndexStr(btav_a2dp_codec_index_t codec_index) {
+       return "AptX";
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_HD:
+       return "AptX-HD";
++    case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE:
++      return "aptX Adaptive";
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_LDAC:
+       return "LDAC";
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_LC3:
+diff --git a/system/stack/a2dp/a2dp_vendor.cc b/system/stack/a2dp/a2dp_vendor.cc
+index a33ac5f..949668a 100644
+--- a/system/stack/a2dp/a2dp_vendor.cc
++++ b/system/stack/a2dp/a2dp_vendor.cc
+@@ -32,6 +32,7 @@
+ #include "stack/include/a2dp_vendor_aptx.h"
+ #include "stack/include/a2dp_vendor_aptx_constants.h"
+ #include "stack/include/a2dp_vendor_aptx_hd.h"
++#include "stack/include/a2dp_vendor_aptx_adaptive.h"
+ #include "stack/include/a2dp_vendor_aptx_hd_constants.h"
+ #include "stack/include/a2dp_vendor_ldac.h"
+ #include "stack/include/a2dp_vendor_ldac_constants.h"
+@@ -45,6 +46,8 @@
+ bool A2DP_IsVendorSourceCodecValid(const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_IsVendorSourceCodecValidAptxAdaptive(p_codec_info);
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID &&
+@@ -101,6 +104,8 @@ bool A2DP_IsVendorPeerSourceCodecValid(const uint8_t* p_codec_info) {
+ bool A2DP_IsVendorPeerSinkCodecValid(const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_IsVendorPeerSinkCodecValidAptxAdaptive(p_codec_info);
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID &&
+@@ -152,6 +157,8 @@ tA2DP_STATUS A2DP_IsVendorSinkCodecSupported(const uint8_t* p_codec_info) {
+ bool A2DP_VendorUsesRtpHeader(bool content_protection_enabled, const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_VendorUsesRtpHeaderAptxAdaptive(content_protection_enabled, p_codec_info);
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID && codec_id == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+@@ -199,6 +206,8 @@ bool A2DP_VendorCodecTypeEquals(const uint8_t* p_codec_info_a, const uint8_t* p_
+   if (vendor_id_a != vendor_id_b || codec_id_a != codec_id_b) {
+     return false;
+   }
++  if (vendor_id_a == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id_a == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_VendorCodecTypeEqualsAptxAdaptive(p_codec_info_a, p_codec_info_b);
+ 
+   // Check for aptX
+   if (vendor_id_a == A2DP_APTX_VENDOR_ID && codec_id_a == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+@@ -284,6 +293,8 @@ bool A2DP_VendorBuildCodecHeader(const uint8_t* p_codec_info, BT_HDR* p_buf,
+ const tA2DP_ENCODER_INTERFACE* A2DP_VendorGetEncoderInterface(const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_VendorGetEncoderInterfaceAptxAdaptive(p_codec_info);
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID && codec_id == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+@@ -333,6 +344,8 @@ const tA2DP_DECODER_INTERFACE* A2DP_VendorGetDecoderInterface(const uint8_t* p_c
+ bool A2DP_VendorAdjustCodec(uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return A2DP_VendorAdjustCodecAptxAdaptive(p_codec_info);
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID && codec_id == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+@@ -367,6 +380,8 @@ bool A2DP_VendorAdjustCodec(uint8_t* p_codec_info) {
+ btav_a2dp_codec_index_t A2DP_VendorSourceCodecIndex(const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE;
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID && codec_id == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+@@ -425,6 +440,8 @@ bool A2DP_VendorInitCodecConfig(btav_a2dp_codec_index_t codec_index, AvdtpSepCon
+       return A2DP_VendorInitCodecConfigAptx(p_cfg);
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_HD:
+       return A2DP_VendorInitCodecConfigAptxHd(p_cfg);
++    case BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE:
++      return A2DP_VendorInitCodecConfigAptxAdaptive(p_cfg);
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_LDAC:
+       return A2DP_VendorInitCodecConfigLdac(p_cfg);
+     case BTAV_A2DP_CODEC_INDEX_SOURCE_LC3:
+@@ -449,6 +466,8 @@ bool A2DP_VendorInitCodecConfig(btav_a2dp_codec_index_t codec_index, AvdtpSepCon
+ std::string A2DP_VendorCodecInfoString(const uint8_t* p_codec_info) {
+   uint32_t vendor_id = A2DP_VendorCodecGetVendorId(p_codec_info);
+   uint16_t codec_id = A2DP_VendorCodecGetCodecId(p_codec_info);
++  if (vendor_id == A2DP_APTX_ADAPTIVE_VENDOR_ID && codec_id == A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH)
++    return "aptX Adaptive (Qualcomm DSP R2)";
+ 
+   // Check for aptX
+   if (vendor_id == A2DP_APTX_VENDOR_ID && codec_id == A2DP_APTX_CODEC_ID_BLUETOOTH) {
+diff --git a/system/stack/a2dp/a2dp_vendor_aptx_adaptive.cc b/system/stack/a2dp/a2dp_vendor_aptx_adaptive.cc
+new file mode 100644
+index 0000000..8703ebe
+--- /dev/null
++++ b/system/stack/a2dp/a2dp_vendor_aptx_adaptive.cc
+@@ -0,0 +1,1329 @@
++/******************************************************************************
++    Copyright (c) 2018, The Linux Foundation. All rights reserved.
++
++    Redistribution and use in source and binary forms, with or without
++    modification, are permitted (subject to the limitations in the
++    disclaimer below) provided that the following conditions are met:
++
++       * Redistributions of source code must retain the above copyright
++         notice, this list of conditions and the following disclaimer.
++
++       * Redistributions in binary form must reproduce the above
++         copyright notice, this list of conditions and the following
++         disclaimer in the documentation and/or other materials provided
++         with the distribution.
++
++       * Neither the name of The Linux Foundation nor the names of its
++         contributors may be used to endorse or promote products derived
++         from this software without specific prior written permission.
++
++    NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
++    GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
++    HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
++    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++    IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
++    GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
++    IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ ******************************************************************************/
++
++
++/******************************************************************************
++ *
++ *  Utility functions to help build and parse the aptX-adaptive Codec Information
++ *  Element and Media Payload.
++ *
++ ******************************************************************************/
++
++#define LOG_TAG "a2dp_vendor_aptx_adaptive"
++
++#include "internal_include/bt_target.h"
++
++#include "stack/include/a2dp_vendor_aptx_adaptive.h"
++
++#include <string.h>
++
++#include <base/logging.h>
++#include <log/log.h>
++#include "audio_hal_interface/adaptive_support.h"
++#include "stack/include/a2dp_ext.h"
++#include "stack/include/a2dp_vendor.h"
++#include "osi/include/osi.h"
++#include "hardware/bt_av.h"
++
++/* aptX-adaptive Source codec capabilities */
++
++/* Default aptX-adaptive codec configuration */
++static const tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_offload_caps = {
++    A2DP_APTX_ADAPTIVE_VENDOR_ID,          /* vendorId */
++    A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH, /* codecId */
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_48000 |
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_96000,   /* sampleRate */
++    A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1,
++    (A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS),      /* channelMode */
++    { A2DP_APTX_ADAPTIVE_TTP_LL_0,
++      A2DP_APTX_ADAPTIVE_TTP_LL_1,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_0,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_1,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_0,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_1,
++      A2DP_APTX_ADAPTIVE_RESERVED_15THBYTE,
++      A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM,
++      A2DP_APTX_ADAPTIVE_SUPPORTED_FEATURES,
++      A2DP_APTX_ADAPTIVE_FIRST_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_SECOND_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_THIRD_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_FOURTH_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_EOC0,
++      A2DP_APTX_ADAPTIVE_EOC1},
++
++    BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24, /* bits_per_sample */
++    {0}
++};
++
++/* Default aptX-adaptive R2.1 codec configuration */
++static const tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_r2_1_offload_caps = {
++    A2DP_APTX_ADAPTIVE_VENDOR_ID,          /* vendorId */
++    A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH, /* codecId */
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_48000 |
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_96000,   /* sampleRate */
++    A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1,
++    (A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS),      /* channelMode */
++    { A2DP_APTX_ADAPTIVE_TTP_LL_0,
++      A2DP_APTX_ADAPTIVE_TTP_LL_1,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_0,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_1,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_0,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_1,
++      A2DP_APTX_ADAPTIVE_RESERVED_15THBYTE,
++      A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM,
++      A2DP_APTX_ADAPTIVE_R2_1_SUPPORTED_FEATURES,
++      A2DP_APTX_ADAPTIVE_FIRST_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_SECOND_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_THIRD_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_FOURTH_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_EOC0,
++      A2DP_APTX_ADAPTIVE_EOC1},
++
++    BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24, /* bits_per_sample */
++    {0}
++};
++
++/* Default aptX-adaptive R2.2 codec configuration */
++static const tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_r2_2_offload_caps = {
++    A2DP_APTX_ADAPTIVE_VENDOR_ID,          /* vendorId */
++    A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH, /* codecId */
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_44100 |
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_48000 |
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_96000,   /* sampleRate */
++    A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1,
++    (A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS),      /* channelMode */
++    { A2DP_APTX_ADAPTIVE_TTP_LL_0,
++      A2DP_APTX_ADAPTIVE_TTP_LL_1,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_0,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_1,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_0,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_1,
++      A2DP_APTX_ADAPTIVE_RESERVED_15THBYTE,
++      A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM,
++      A2DP_APTX_ADAPTIVE_R2_2_SUPPORTED_FEATURES,
++      A2DP_APTX_ADAPTIVE_FIRST_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_SECOND_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_THIRD_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_FOURTH_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_EOC0,
++      A2DP_APTX_ADAPTIVE_EOC1},
++
++    BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24, /* bits_per_sample */
++    {0}
++};
++
++/* Default aptX-adaptive codec configuration */
++
++/* Default aptX-adaptive offload codec configuration */
++static const tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_default_offload_config = {
++    A2DP_APTX_ADAPTIVE_VENDOR_ID,          /* vendorId */
++    A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH, /* codecId */
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_48000,   /* sampleRate */
++    A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1,
++    (A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS),      /* channelMode */
++    { A2DP_APTX_ADAPTIVE_TTP_LL_0,
++      A2DP_APTX_ADAPTIVE_TTP_LL_1,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_0,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_1,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_0,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_1,
++      A2DP_APTX_ADAPTIVE_RESERVED_15THBYTE,
++      A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM,
++      A2DP_APTX_ADAPTIVE_SUPPORTED_FEATURES,
++      A2DP_APTX_ADAPTIVE_FIRST_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_SECOND_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_THIRD_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_FOURTH_SETUP_PREF,
++      A2DP_APTX_ADAPTIVE_EOC0,
++      A2DP_APTX_ADAPTIVE_EOC1},
++
++    BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24, /* bits_per_sample */
++    {0}
++};
++
++/* Default aptX-adaptive R2.1 offload codec configuration */
++
++/* Default aptX-adaptive R2.2 offload codec configuration */
++
++static const tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_r1_offload_caps = {
++    A2DP_APTX_ADAPTIVE_VENDOR_ID,          /* vendorId */
++    A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH, /* codecId */
++    A2DP_APTX_ADAPTIVE_SAMPLERATE_48000,   /* sampleRate */
++    A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1,
++    (A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO |
++     A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO ),      /* channelMode */
++    { A2DP_APTX_ADAPTIVE_TTP_LL_0,
++      A2DP_APTX_ADAPTIVE_TTP_LL_1,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_0,
++      A2DP_APTX_ADAPTIVE_TTP_HQ_1,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_0,
++      A2DP_APTX_ADAPTIVE_TTP_TWS_1,
++      0x00,
++      A2DP_APTX_ADAPTIVE_EOC0,
++      A2DP_APTX_ADAPTIVE_EOC1,
++      0x00,
++      0x00,
++      0x00,
++      0x00,
++      0x00,
++      0x00},
++
++    BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24, /* bits_per_sample */
++    {0}
++};
++
++
++tA2DP_APTX_ADAPTIVE_CIE a2dp_aptx_adaptive_caps, a2dp_aptx_adaptive_default_config;
++
++
++
++
++UNUSED_ATTR static tA2DP_STATUS A2DP_CodecInfoMatchesCapabilityAptxAdaptive(
++    const tA2DP_APTX_ADAPTIVE_CIE* p_cap, const uint8_t* p_codec_info,
++    bool is_peer_codec_info);
++
++// Builds the aptX-adaptive Media Codec Capabilities byte sequence beginning from the
++// LOSC octet. |media_type| is the media type |AVDT_MEDIA_TYPE_*|.
++// |p_ie| is a pointer to the aptX-adaptive Codec Information Element information.
++// The result is stored in |p_result|. Returns A2DP_SUCCESS on success,
++// otherwise the corresponding A2DP error status code.
++static tA2DP_STATUS A2DP_BuildInfoAptxAdaptive(uint8_t media_type,
++                                         const tA2DP_APTX_ADAPTIVE_CIE* p_ie,
++                                         uint8_t* p_result) {
++  if (p_ie == NULL || p_result == NULL) {
++    return A2DP_INVALID_CODEC_PARAMETER;
++  }
++
++  *p_result++ = A2DP_APTX_ADAPTIVE_CODEC_LEN;
++  *p_result++ = (media_type << 4);
++  *p_result++ = A2DP_MEDIA_CT_NON_A2DP;
++  *p_result++ = (uint8_t)(p_ie->vendorId & 0x000000FF);
++  *p_result++ = (uint8_t)((p_ie->vendorId & 0x0000FF00) >> 8);
++  *p_result++ = (uint8_t)((p_ie->vendorId & 0x00FF0000) >> 16);
++  *p_result++ = (uint8_t)((p_ie->vendorId & 0xFF000000) >> 24);
++  *p_result++ = (uint8_t)(p_ie->codecId & 0x00FF);
++  *p_result++ = (uint8_t)((p_ie->codecId & 0xFF00) >> 8);
++  *p_result++ = p_ie->sampleRate | p_ie->sourceType;
++  *p_result++ = p_ie->channelMode;
++
++  memcpy(p_result, &(p_ie->aptx_data), sizeof(p_ie->aptx_data));
++  p_result += 18;
++  memset(p_result, 0x0, sizeof(p_ie->reserved_data));
++  p_result += sizeof(p_ie->reserved_data);
++
++  return A2DP_SUCCESS;
++}
++
++// Parses the aptX-adaptive Media Codec Capabilities byte sequence beginning from the
++// LOSC octet. The result is stored in |p_ie|. The byte sequence to parse is
++// |p_codec_info|. If |is_capability| is true, the byte sequence is
++// codec capabilities, otherwise is codec configuration.
++// Returns A2DP_SUCCESS on success, otherwise the corresponding A2DP error
++// status code.
++static tA2DP_STATUS A2DP_ParseInfoAptxAdaptive(tA2DP_APTX_ADAPTIVE_CIE* p_ie,
++                                         const uint8_t* p_codec_info,
++                                         bool is_capability) {
++  uint8_t losc;
++  uint8_t media_type;
++  tA2DP_CODEC_TYPE codec_type;
++
++  if (p_ie == NULL || p_codec_info == NULL) return A2DP_INVALID_CODEC_PARAMETER;
++
++  // Check the codec capability length
++  losc = *p_codec_info++;
++
++  if (losc != A2DP_APTX_ADAPTIVE_CODEC_LEN) {
++    ALOGE("%s: A2DP_APTX_ADAPTIVE_CODEC_LEN fail", __func__);
++    return AVDTP_UNSUPPORTED_CONFIGURATION;
++  }
++
++  media_type = (*p_codec_info++) >> 4;
++  codec_type = static_cast<tA2DP_CODEC_TYPE>(*p_codec_info++);
++  /* Check the Media Type and Media Codec Type */
++  if (media_type != AVDT_MEDIA_TYPE_AUDIO ||
++      codec_type != A2DP_MEDIA_CT_NON_A2DP) {
++    ALOGE("%s: A2DP_MEDIA_CT_NON_A2DP ID", __func__);
++    return AVDTP_UNSUPPORTED_CONFIGURATION;
++  }
++
++  // Check the Vendor ID and Codec ID */
++  p_ie->vendorId = (*p_codec_info & 0x000000FF) |
++                   (*(p_codec_info + 1) << 8 & 0x0000FF00) |
++                   (*(p_codec_info + 2) << 16 & 0x00FF0000) |
++                   (*(p_codec_info + 3) << 24 & 0xFF000000);
++  p_codec_info += 4;
++  p_ie->codecId =
++      (*p_codec_info & 0x00FF) | (*(p_codec_info + 1) << 8 & 0xFF00);
++  p_codec_info += 2;
++  if (p_ie->vendorId != A2DP_APTX_ADAPTIVE_VENDOR_ID ||
++      p_ie->codecId != A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH) {
++      ALOGE("%s: A2DP_APTX_ADAPTIVE ID WRONG CODEC", __func__);
++    return AVDTP_UNSUPPORTED_CONFIGURATION;
++  }
++
++  p_ie->sourceType = *p_codec_info & 0x07;
++  p_ie->sampleRate = *p_codec_info & 0xF8;
++  p_codec_info++;
++
++  p_ie->channelMode = *p_codec_info & 0x3F;
++  p_codec_info++;
++
++  memcpy(&(p_ie->aptx_data), p_codec_info, sizeof(p_ie->aptx_data));
++  p_codec_info += 18;
++
++  if (is_capability) return A2DP_SUCCESS;
++
++  // 96 kHz is encoded as 0xa0, so a generic one-bit check is incorrect.
++  if (p_ie->sampleRate != A2DP_APTX_ADAPTIVE_SAMPLERATE_44100 &&
++      p_ie->sampleRate != A2DP_APTX_ADAPTIVE_SAMPLERATE_48000 &&
++      p_ie->sampleRate != A2DP_APTX_ADAPTIVE_SAMPLERATE_96000)
++    return A2DP_INVALID_SAMPLING_FREQUENCY;
++  if (p_ie->channelMode == 0 || (p_ie->channelMode & (p_ie->channelMode - 1)) != 0)
++    return A2DP_INVALID_CHANNEL_MODE;
++
++  return A2DP_SUCCESS;
++}
++
++bool A2DP_IsVendorSourceCodecValidAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE cfg_cie;
++
++  /* Use a liberal check when parsing the codec info */
++  return (A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, false) ==
++          A2DP_SUCCESS) ||
++         (A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, true) == A2DP_SUCCESS);
++}
++
++bool A2DP_GetAptxAdaptiveCIE(const uint8_t* p_codec_info,
++                        tA2DP_APTX_ADAPTIVE_CIE *cfg_cie) {
++  return (A2DP_ParseInfoAptxAdaptive(cfg_cie, p_codec_info, false) ==
++          A2DP_SUCCESS);
++}
++bool A2DP_IsVendorPeerSinkCodecValidAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE cfg_cie;
++
++  /* Use a liberal check when parsing the codec info */
++  return (A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, false) ==
++          A2DP_SUCCESS) ||
++         (A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, true) == A2DP_SUCCESS);
++}
++
++// Checks whether A2DP aptX-adaptive codec configuration matches with a device's
++// codec capabilities. |p_cap| is the aptX-adaptive codec configuration.
++// |p_codec_info| is the device's codec capabilities.
++// If |is_capability| is true, the byte sequence is codec capabilities,
++// otherwise is codec configuration.
++// |p_codec_info| contains the codec capabilities for a peer device that
++// is acting as an A2DP source.
++// Returns A2DP_SUCCESS if the codec configuration matches with capabilities,
++// otherwise the corresponding A2DP error status code.
++static tA2DP_STATUS A2DP_CodecInfoMatchesCapabilityAptxAdaptive(
++    const tA2DP_APTX_ADAPTIVE_CIE* p_cap, const uint8_t* p_codec_info,
++    bool is_capability) {
++  tA2DP_STATUS status;
++  tA2DP_APTX_ADAPTIVE_CIE cfg_cie;
++
++  /* parse configuration */
++  status = A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, is_capability);
++  if (status != A2DP_SUCCESS) {
++    ALOGE("%s: parsing failed %d", __func__, status);
++    return status;
++  }
++
++  /* verify that each parameter is in range */
++
++  ALOGD("%s: FREQ peer: 0x%x, capability 0x%x", __func__,
++            cfg_cie.sampleRate, p_cap->sampleRate);
++  ALOGD("%s: CH_MODE peer: 0x%x, capability 0x%x", __func__,
++            cfg_cie.channelMode, p_cap->channelMode);
++
++  /* sampling frequency */
++  if ((cfg_cie.sampleRate & p_cap->sampleRate) == 0) return A2DP_NOT_SUPPORTED_SAMPLING_FREQUENCY;
++
++  /* channel mode */
++  if ((cfg_cie.channelMode & p_cap->channelMode) == 0) return A2DP_NOT_SUPPORTED_CHANNEL_MODE;
++
++  return A2DP_SUCCESS;
++}
++
++bool A2DP_VendorUsesRtpHeaderAptxAdaptive(UNUSED_ATTR bool content_protection_enabled,
++                                    UNUSED_ATTR const uint8_t* p_codec_info) {
++  return true;
++}
++
++const char* A2DP_VendorCodecNameAptxAdaptive(
++    UNUSED_ATTR const uint8_t* p_codec_info) {
++  return "aptX-adaptive";
++}
++
++bool A2DP_VendorCodecTypeEqualsAptxAdaptive(const uint8_t* p_codec_info_a,
++                                      const uint8_t* p_codec_info_b) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie_a;
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie_b;
++
++  // Check whether the codec info contains valid data
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie_a, p_codec_info_a, true);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return false;
++  }
++  a2dp_status = A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie_b, p_codec_info_b, true);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return false;
++  }
++
++  return true;
++}
++
++bool A2DP_VendorCodecEqualsAptxAdaptive(const uint8_t* p_codec_info_a,
++                                  const uint8_t* p_codec_info_b) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie_a;
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie_b;
++
++  // Check whether the codec info contains valid data
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie_a, p_codec_info_a, true);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return false;
++  }
++  a2dp_status = A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie_b, p_codec_info_b, true);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return false;
++  }
++
++  return (aptx_adaptive_cie_a.sampleRate == aptx_adaptive_cie_b.sampleRate) &&
++         (aptx_adaptive_cie_a.channelMode == aptx_adaptive_cie_b.channelMode);
++}
++
++int A2DP_VendorGetTrackSampleRateAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie;
++
++  // Check whether the codec info contains valid data
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie, p_codec_info, false);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return -1;
++  }
++
++  if (aptx_adaptive_cie.sampleRate == A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) return 44100;
++  if (aptx_adaptive_cie.sampleRate == A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) return 48000;
++  if (aptx_adaptive_cie.sampleRate == A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) return 96000;
++
++  return -1;
++}
++
++int A2DP_VendorGetTrackBitsPerSampleAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie;
++
++  // Check whether the codec info contains valid data
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie, p_codec_info, false);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return -1;
++  }
++
++  return 24;  // The selected K40 R2 offload profile accepts 24-bit PCM.
++}
++
++int A2DP_VendorGetTrackChannelCountAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie;
++
++  // Check whether the codec info contains valid data
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie, p_codec_info, false);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: cannot decode codec information: %d", __func__,
++              a2dp_status);
++    return -1;
++  }
++
++  switch (aptx_adaptive_cie.channelMode) {
++    case A2DP_APTX_ADAPTIVE_CHANNELS_MONO:
++      return 1;
++    case A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO:
++      return 1;
++    case A2DP_APTX_ADAPTIVE_CHANNELS_STEREO:
++      return 2;
++    case A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO:
++      return 2;
++    case A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO:
++      return 2;
++  }
++
++  return -1;
++}
++
++bool A2DP_VendorGetPacketTimestampAptxAdaptive(
++    UNUSED_ATTR const uint8_t* p_codec_info, const uint8_t* p_data,
++    uint32_t* p_timestamp) {
++  // TODO: Is this function really codec-specific?
++  *p_timestamp = *(const uint32_t*)p_data;
++  return true;
++}
++
++bool A2DP_VendorBuildCodecHeaderAptxAdaptive(UNUSED_ATTR const uint8_t* p_codec_info,
++                                       UNUSED_ATTR BT_HDR* p_buf,
++                                       UNUSED_ATTR uint16_t frames_per_packet) {
++  // Nothing to do
++  return true;
++}
++
++bool A2DP_VendorDumpCodecInfoAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_STATUS a2dp_status;
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie;
++
++  ALOGD("%s", __func__);
++
++  a2dp_status = A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie, p_codec_info, true);
++  if (a2dp_status != A2DP_SUCCESS) {
++    ALOGE("%s: A2DP_ParseInfoAptxAdaptive fail:%d", __func__,
++              a2dp_status);
++    return false;
++  }
++
++  ALOGD("\tsamp_freq: 0x%x", aptx_adaptive_cie.sampleRate);
++  if (aptx_adaptive_cie.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++    ALOGD("\tsamp_freq: (44100)");
++  }
++  if (aptx_adaptive_cie.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++    ALOGD("\tsamp_freq: (48000)");
++  }
++  if (aptx_adaptive_cie.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++    ALOGD("\tsamp_freq: (96000)");
++  }
++  ALOGD("\tch_mode: 0x%x", aptx_adaptive_cie.channelMode);
++  if (aptx_adaptive_cie.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++    ALOGD("\tch_mode: (Mono)");
++  }
++
++  if (aptx_adaptive_cie.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++    ALOGD("\tch_mode: (TWS Mono)");
++  }
++  if (aptx_adaptive_cie.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++    ALOGD("\tch_mode: (Stereo)");
++  }
++
++  if (aptx_adaptive_cie.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++    ALOGD("\tch_mode: (Joint Stereo)");
++  }
++  if (aptx_adaptive_cie.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++    ALOGD("\tch_mode: (TWS Stereo)");
++  }
++
++  return true;
++}
++
++const tA2DP_ENCODER_INTERFACE* A2DP_VendorGetEncoderInterfaceAptxAdaptive(
++    const uint8_t* p_codec_info) {
++  if (!A2DP_IsVendorSourceCodecValidAptxAdaptive(p_codec_info)) return NULL;
++
++  if (!bluetooth::audio::a2dp::is_aptx_adaptive_supported()) return nullptr;
++  // The source session requires an interface even for DSP codecs. Reuse the
++  // platform's offload-only callbacks; these do not encode PCM in software.
++  return A2DP_GetEncoderInterfaceExt(p_codec_info);
++}
++
++bool A2DP_VendorAdjustCodecAptxAdaptive(uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE cfg_cie;
++
++  // Nothing to do: just verify the codec info is valid
++  if (A2DP_ParseInfoAptxAdaptive(&cfg_cie, p_codec_info, true) != A2DP_SUCCESS)
++    return false;
++
++  return true;
++}
++
++tA2DP_STATUS A2DP_VendorIsCodecConfigMatchAptxAdaptive(const uint8_t* p_codec_info) {
++  tA2DP_APTX_ADAPTIVE_CIE aptx_adaptive_cie;
++
++  ALOGD("%s", __func__);
++  tA2DP_STATUS a2dp_status =
++      A2DP_ParseInfoAptxAdaptive(&aptx_adaptive_cie, p_codec_info, false);
++  ALOGD("%s: a2dp_status: %d", __func__, a2dp_status);
++  return a2dp_status;
++}
++
++btav_a2dp_codec_index_t A2DP_VendorSourceCodecIndexAptxAdaptive(
++    const uint8_t* /* p_codec_info */) {
++  return BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE;
++}
++
++const char* A2DP_VendorCodecIndexStrAptxAdaptive(void) { return "aptX-adaptive"; }
++
++bool A2DP_VendorInitCodecConfigAptxAdaptive(AvdtpSepConfig* p_cfg) {
++  if (!bluetooth::audio::a2dp::is_aptx_adaptive_supported()) {
++    ALOGE("%s: APTX-ADAPTIVE disabled in both SW and HW mode",
++                                                        __func__);
++    return false;
++  }
++
++  if (A2DP_BuildInfoAptxAdaptive(AVDT_MEDIA_TYPE_AUDIO, &a2dp_aptx_adaptive_caps,
++                           p_cfg->codec_info) != A2DP_SUCCESS) {
++    return false;
++  }
++
++#if (BTA_AV_CO_CP_SCMS_T == TRUE)
++  /* Content protection info - support SCMS-T */
++  uint8_t* p = p_cfg->protect_info;
++  *p++ = AVDT_CP_LOSC;
++  UINT16_TO_STREAM(p, AVDT_CP_SCMS_T_ID);
++  p_cfg->num_protect = 1;
++#endif
++
++  return true;
++}
++
++A2dpCodecConfigAptxAdaptive::A2dpCodecConfigAptxAdaptive(
++    btav_a2dp_codec_priority_t codec_priority)
++    : A2dpCodecConfig(BTAV_A2DP_CODEC_INDEX_SOURCE_APTX_ADAPTIVE,
++                        bluetooth::a2dp::CodecId::APTX_ADAPTIVE, "aptX-adaptive",
++                      codec_priority) {
++  // Compute the local capability
++  // K40 R2 DSP profile. Newer R2.1/R2.2 features need separate validation.
++  a2dp_aptx_adaptive_caps = a2dp_aptx_adaptive_offload_caps;
++  a2dp_aptx_adaptive_default_config = a2dp_aptx_adaptive_default_offload_config;
++  if (a2dp_aptx_adaptive_caps.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++    codec_local_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_44100;
++  }
++  if (a2dp_aptx_adaptive_caps.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++    codec_local_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_48000;
++  }
++  if (a2dp_aptx_adaptive_caps.sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++    codec_local_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_96000;
++  }
++  codec_local_capability_.bits_per_sample = a2dp_aptx_adaptive_caps.bits_per_sample;
++  if (a2dp_aptx_adaptive_caps.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++    codec_local_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++  }
++  if (a2dp_aptx_adaptive_caps.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++    codec_local_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++  }
++  if (a2dp_aptx_adaptive_caps.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++    codec_local_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++  }
++
++  if (a2dp_aptx_adaptive_caps.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++    codec_local_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++  }
++  if (a2dp_aptx_adaptive_caps.channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++    codec_local_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++  }
++
++}
++
++A2dpCodecConfigAptxAdaptive::~A2dpCodecConfigAptxAdaptive() {}
++
++bool A2dpCodecConfigAptxAdaptive::init() {
++  return bluetooth::audio::a2dp::is_aptx_adaptive_supported();
++}
++
++bool A2dpCodecConfigAptxAdaptive::useRtpHeaderMarkerBit() const { return false; }
++
++//
++// Selects the best sample rate from |sampleRate|.
++// The result is stored in |p_result| and p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_best_sample_rate(uint8_t sampleRate,
++                                    tA2DP_APTX_ADAPTIVE_CIE* p_result,
++                                    btav_a2dp_codec_config_t* p_codec_config) {
++  ALOGD("%s: Sample rate: %x", __func__, sampleRate);
++  if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++    p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++    p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_44100;
++    return true;
++  }
++  if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++    p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_48000;
++    p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_48000;
++    return true;
++  }
++  if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++    p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_96000;
++    p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_96000;
++    return true;
++  }
++  return false;
++}
++
++//
++// Selects the audio sample rate from |p_codec_audio_config|.
++// |sampleRate| contains the capability.
++// The result is stored in |p_result| and |p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_audio_sample_rate(
++    const btav_a2dp_codec_config_t* p_codec_audio_config, uint8_t sampleRate,
++    tA2DP_APTX_ADAPTIVE_CIE* p_result, btav_a2dp_codec_config_t* p_codec_config) {
++  ALOGD("%s: Sample rate: %x", __func__, sampleRate);
++  switch (p_codec_audio_config->sample_rate) {
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_44100:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++        p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++        p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_44100;
++        return true;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_48000:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++        p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_48000;
++        p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_48000;
++        return true;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_96000:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++        p_result->sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_96000;
++        p_codec_config->sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_96000;
++        return true;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_88200:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_176400:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_192000:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_NONE:
++    default:
++      break;
++  }
++  return false;
++}
++
++//
++// Selects the best bits per sample.
++// The result is stored in |p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_best_bits_per_sample(
++    btav_a2dp_codec_config_t* p_codec_config) {
++  p_codec_config->bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24;
++  return true;
++}
++
++//
++// Selects the audio bits per sample from |p_codec_audio_config|.
++// The result is stored in |p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_audio_bits_per_sample(
++    const btav_a2dp_codec_config_t* p_codec_audio_config,
++    btav_a2dp_codec_config_t* p_codec_config) {
++  switch (p_codec_audio_config->bits_per_sample) {
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24:
++       p_codec_config->bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24;
++       return true;
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_32:
++       p_codec_config->bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_32;
++       return true;
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_16:
++      p_codec_config->bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_16;
++      return true;
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE:
++      break;
++  }
++  return false;
++}
++
++//
++// Selects the best channel mode from |channelMode|.
++// The result is stored in |p_result| and |p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_best_channel_mode(uint8_t channelMode,
++                                     tA2DP_APTX_ADAPTIVE_CIE* p_result,
++                                     btav_a2dp_codec_config_t* p_codec_config) {
++
++  ALOGD("%s: Channel Mode: %x", __func__, channelMode);
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    return true;
++  }
++
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_STEREO;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    return true;
++  }
++
++
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    return true;
++  }
++
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    return true;
++  }
++
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_MONO;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    return true;
++  }
++
++  if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++    p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO;
++    p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    return true;
++  }
++  return false;
++}
++
++//
++// Selects the audio channel mode from |p_codec_audio_config|.
++// |channelMode| contains the capability.
++// The result is stored in |p_result| and |p_codec_config|.
++// Returns true if a selection was made, otherwise false.
++//
++static bool select_audio_channel_mode(
++    const btav_a2dp_codec_config_t* p_codec_audio_config, uint8_t channelMode,
++    tA2DP_APTX_ADAPTIVE_CIE* p_result, btav_a2dp_codec_config_t* p_codec_config) {
++  ALOGE("%s: p_codec_audio_config->channel_mode: %x, channelMode: %x",
++                         __func__, p_codec_audio_config->channel_mode, channelMode);
++  switch (p_codec_audio_config->channel_mode) {
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_MONO:
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_MONO;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++        return true;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++        return true;
++      }
++      break;
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO:
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++        return true;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_STEREO;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++        return true;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++        return true;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++        p_result->channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO;
++        p_codec_config->channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++        return true;
++      }
++      break;
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_NONE:
++      break;
++  }
++
++  return false;
++}
++
++tA2DP_STATUS A2dpCodecConfigAptxAdaptive::setCodecConfig(const uint8_t* p_peer_codec_info,
++                                           bool is_capability,
++                                           uint8_t* p_result_codec_config) {
++  std::lock_guard<std::recursive_mutex> lock(codec_mutex_);
++  tA2DP_APTX_ADAPTIVE_CIE sink_info_cie;
++  tA2DP_APTX_ADAPTIVE_CIE result_config_cie;
++  uint8_t sampleRate;
++  uint8_t channelMode;
++
++  uint8_t sink_byte_17th = 0x00, src_byte_17th = 0x00, byte_negotiated_17th = 0x00;
++  // Save the internal state
++  btav_a2dp_codec_config_t saved_codec_config = codec_config_;
++  btav_a2dp_codec_config_t saved_codec_capability = codec_capability_;
++  btav_a2dp_codec_config_t saved_codec_selectable_capability =
++      codec_selectable_capability_;
++  btav_a2dp_codec_config_t saved_codec_user_config = codec_user_config_;
++  btav_a2dp_codec_config_t saved_codec_audio_config = codec_audio_config_;
++  uint8_t saved_ota_codec_config[AVDT_CODEC_SIZE];
++  uint8_t saved_ota_codec_peer_capability[AVDT_CODEC_SIZE];
++  uint8_t saved_ota_codec_peer_config[AVDT_CODEC_SIZE];
++  memcpy(saved_ota_codec_config, ota_codec_config_.data(), AVDT_CODEC_SIZE);
++  memcpy(saved_ota_codec_peer_capability, ota_codec_peer_capability_.data(),
++         AVDT_CODEC_SIZE);
++  memcpy(saved_ota_codec_peer_config, ota_codec_peer_config_.data(),
++         AVDT_CODEC_SIZE);
++
++  tA2DP_STATUS status =
++      A2DP_ParseInfoAptxAdaptive(&sink_info_cie, p_peer_codec_info, is_capability);
++  if (status != A2DP_SUCCESS) {
++    ALOGE("%s: can't parse peer's Sink capabilities: error = %d",
++              __func__, status);
++    goto fail;
++  }
++
++  // Build the preferred configuration
++  memset(&result_config_cie, 0, sizeof(result_config_cie));
++  result_config_cie.vendorId = a2dp_aptx_adaptive_caps.vendorId;
++  result_config_cie.codecId = a2dp_aptx_adaptive_caps.codecId;
++
++  ALOGI("sink additional supported features: 0x%x",
++            sink_info_cie.aptx_data.aptx_adaptive_sup_features);
++  ALOGI("sink cap ext ver num: 0x%x", sink_info_cie.aptx_data.cap_ext_ver_num);
++
++  if (sink_info_cie.aptx_data.cap_ext_ver_num == 0) {
++    result_config_cie.aptx_data = a2dp_aptx_adaptive_r1_offload_caps.aptx_data;
++    if (sink_info_cie.aptx_data.cap_ext_ver_num == 0) {
++      ALOGI("%s: Sink supports R1.0 decoder ", __func__);
++      result_config_cie.aptx_data = sink_info_cie.aptx_data;
++    }
++    ALOGI("%s: Select Aptx Adaptive R1 config", __func__);
++  } else {
++    sink_byte_17th = (sink_info_cie.aptx_data.aptx_adaptive_sup_features & 0xFF);
++    src_byte_17th = (a2dp_aptx_adaptive_caps.aptx_data.aptx_adaptive_sup_features & 0xFF);
++    byte_negotiated_17th = (((sink_byte_17th >> 4) | (src_byte_17th >> 4)) << 4) |
++                           ((sink_byte_17th & src_byte_17th) & 0x0F);
++    ALOGI("sink byte: 0x%x, src byte: 0x%x, byte negotiated: 0x%x",
++                       sink_byte_17th, src_byte_17th, byte_negotiated_17th);
++    if (false /* R2.2 not supported by this bridge */) {
++      ALOGI("%s: Select Aptx Adaptive R2.2 config", __func__);
++      result_config_cie.aptx_data = a2dp_aptx_adaptive_r2_2_offload_caps.aptx_data;
++      if((sink_info_cie.aptx_data.aptx_adaptive_sup_features &APTX_ADAPTIVE_SINK_R2_2_SUPPORT_CAP)
++          && (sink_info_cie.aptx_data.cap_ext_ver_num == A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM)) {
++        ALOGI("%s: Sink supports R2.2 decoder ", __func__);
++        result_config_cie.aptx_data.aptx_adaptive_sup_features =
++           (sink_info_cie.aptx_data.aptx_adaptive_sup_features & 0xFFFFFF00)|byte_negotiated_17th;
++        a2dp_aptx_adaptive_caps.sampleRate |= A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++        a2dp_aptx_adaptive_default_config.sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++        codec_config_.codec_specific_3 &= ~(int64_t) APTX_ADAPTIVE_R2_2_SUPPORT_MASK;
++        codec_config_.codec_specific_3 |= (int64_t) APTX_ADAPTIVE_R2_2_SUPPORT_AVAILABLE;
++      } else {
++        ALOGI("%s: Sink doesn't support R2.2 decoder, limit local sample rate caps",
++                         __func__);
++        ALOGI("%s: Sink supports R2.x decoder ", __func__);
++        a2dp_aptx_adaptive_caps.sampleRate &= ~A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++        a2dp_aptx_adaptive_default_config.sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_48000;
++        result_config_cie.aptx_data.aptx_adaptive_sup_features =
++          (sink_info_cie.aptx_data.aptx_adaptive_sup_features & 0xFFFFFF00) | byte_negotiated_17th;
++        codec_config_.codec_specific_3 &= ~(int64_t) APTX_ADAPTIVE_R2_2_SUPPORT_MASK;
++        codec_config_.codec_specific_3 |= (int64_t) APTX_ADAPTIVE_R2_2_SUPPORT_NOT_AVAILABLE;
++      }
++    } else if (false /* R2.1 not supported by this bridge */) {
++      ALOGI("%s: Select Aptx Adaptive R2.1 config", __func__);
++      result_config_cie.aptx_data = a2dp_aptx_adaptive_r2_1_offload_caps.aptx_data;
++      result_config_cie.aptx_data.aptx_adaptive_sup_features =
++          (sink_info_cie.aptx_data.aptx_adaptive_sup_features & 0xFFFFFF00) | byte_negotiated_17th;
++    } else {
++      ALOGI("%s: Select Aptx Adaptive R2 config", __func__);
++      result_config_cie.aptx_data = a2dp_aptx_adaptive_offload_caps.aptx_data;
++      result_config_cie.aptx_data.aptx_adaptive_sup_features =
++          (sink_info_cie.aptx_data.aptx_adaptive_sup_features & 0xFFFFFF00) | byte_negotiated_17th;
++    }
++    ALOGI("res cfg subfeat 0x%x",result_config_cie.aptx_data.aptx_adaptive_sup_features);
++  }
++
++  // Select the sample frequency
++  sampleRate = a2dp_aptx_adaptive_caps.sampleRate & sink_info_cie.sampleRate;
++  ALOGD("%s: Sample rate: source caps = 0x%x "
++              "sink info = 0x%x",
++              __func__, a2dp_aptx_adaptive_caps.sampleRate,
++              sink_info_cie.sampleRate);
++  codec_config_.sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_NONE;
++  switch (codec_user_config_.sample_rate) {
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_44100:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++        result_config_cie.sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_44100;
++        codec_capability_.sample_rate = codec_user_config_.sample_rate;
++        codec_config_.sample_rate = codec_user_config_.sample_rate;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_48000:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++        result_config_cie.sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_48000;
++        codec_capability_.sample_rate = codec_user_config_.sample_rate;
++        codec_config_.sample_rate = codec_user_config_.sample_rate;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_96000:
++      if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++        result_config_cie.sampleRate = A2DP_APTX_ADAPTIVE_SAMPLERATE_96000;
++        codec_capability_.sample_rate = codec_user_config_.sample_rate;
++        codec_config_.sample_rate = codec_user_config_.sample_rate;
++      }
++      break;
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_88200:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_176400:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_192000:
++    case BTAV_A2DP_CODEC_SAMPLE_RATE_NONE:
++    default:
++      codec_capability_.sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_NONE;
++      codec_config_.sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_NONE;
++      break;
++  }
++
++  // Select the sample frequency if there is no user preference
++  do {
++    // Compute the selectable capability
++    codec_selectable_capability_.sample_rate = BTAV_A2DP_CODEC_SAMPLE_RATE_NONE;
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100) {
++      codec_selectable_capability_.sample_rate |=
++          BTAV_A2DP_CODEC_SAMPLE_RATE_44100;
++    }
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000) {
++      codec_selectable_capability_.sample_rate |=
++          BTAV_A2DP_CODEC_SAMPLE_RATE_48000;
++    }
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000) {
++      codec_selectable_capability_.sample_rate |=
++          BTAV_A2DP_CODEC_SAMPLE_RATE_96000;
++    }
++
++    if (codec_config_.sample_rate != BTAV_A2DP_CODEC_SAMPLE_RATE_NONE) break;
++
++    // Compute the common capability
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_44100)
++      codec_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_44100;
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_48000)
++      codec_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_48000;
++    if (sampleRate & A2DP_APTX_ADAPTIVE_SAMPLERATE_96000)
++      codec_capability_.sample_rate |= BTAV_A2DP_CODEC_SAMPLE_RATE_96000;
++
++    // No user preference - try the codec audio config
++    if (select_audio_sample_rate(&codec_audio_config_, sampleRate,
++                                 &result_config_cie, &codec_config_)) {
++      break;
++    }
++
++    // No user preference - try the default config
++    if (select_best_sample_rate(
++            a2dp_aptx_adaptive_default_config.sampleRate & sink_info_cie.sampleRate,
++            &result_config_cie, &codec_config_)) {
++      break;
++    }
++
++    // No user preference - use the best match
++    if (select_best_sample_rate(sampleRate, &result_config_cie,
++                                &codec_config_)) {
++      break;
++    }
++  } while (false);
++  if (codec_config_.sample_rate == BTAV_A2DP_CODEC_SAMPLE_RATE_NONE) {
++    ALOGE("%s: cannot match sample frequency: source caps = 0x%x "
++              "sink info = 0x%x",
++              __func__, a2dp_aptx_adaptive_caps.sampleRate, sink_info_cie.sampleRate);
++    goto fail;
++  }
++
++  // Select the bits per sample
++  // NOTE: this information is NOT included in the aptX-adaptive A2DP codec
++  // description that is sent OTA.
++  codec_config_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE;
++  switch (codec_user_config_.bits_per_sample) {
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_16:
++      codec_capability_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE;
++      codec_config_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE;
++      break;
++
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24:
++      codec_capability_.bits_per_sample = codec_user_config_.bits_per_sample;
++      codec_config_.bits_per_sample = codec_user_config_.bits_per_sample;
++      break;
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_32:
++
++    case BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE:
++      codec_capability_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE;
++      codec_config_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE;
++      break;
++  }
++  // Select the bits per sample if there is no user preference
++  do {
++    // Compute the selectable capability
++    codec_selectable_capability_.bits_per_sample =
++        a2dp_aptx_adaptive_caps.bits_per_sample;
++
++    if (codec_config_.bits_per_sample != BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE)
++      break;
++
++    // Compute the common capability
++    codec_capability_.bits_per_sample = BTAV_A2DP_CODEC_BITS_PER_SAMPLE_24;
++
++    // No user preference - try the codec audio config
++    if (select_audio_bits_per_sample(&codec_audio_config_, &codec_config_)) {
++      break;
++    }
++
++    // No user preference - try the default config
++    if (select_best_bits_per_sample(&codec_config_)) {
++      break;
++    }
++
++    // No user preference - use the best match
++    // NOTE: no-op - kept here for consistency
++    if (select_best_bits_per_sample(&codec_config_)) {
++      break;
++    }
++  } while (false);
++  if (codec_config_.bits_per_sample == BTAV_A2DP_CODEC_BITS_PER_SAMPLE_NONE) {
++    ALOGE("%s: cannot match bits per sample: user preference = 0x%x",
++              __func__, codec_user_config_.bits_per_sample);
++    goto fail;
++  }
++
++  // Select the channel mode
++  channelMode = a2dp_aptx_adaptive_caps.channelMode & sink_info_cie.channelMode;
++  codec_config_.channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_NONE;
++  ALOGE("%s: codec_user_config_.channel_mode: %x channelMode: %x",
++                       __func__, codec_user_config_.channel_mode, channelMode);
++  switch (codec_user_config_.channel_mode) {
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_MONO:
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_MONO;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_MONO;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      break;
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO:
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_STEREO;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++        result_config_cie.channelMode = A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO;
++        codec_capability_.channel_mode = codec_user_config_.channel_mode;
++        codec_config_.channel_mode = codec_user_config_.channel_mode;
++        break;
++      }
++      break;
++    case BTAV_A2DP_CODEC_CHANNEL_MODE_NONE:
++      codec_capability_.channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_NONE;
++      codec_config_.channel_mode = BTAV_A2DP_CODEC_CHANNEL_MODE_NONE;
++      break;
++  }
++  // Select the channel mode if there is no user preference
++  do {
++    // Compute the selectable capability
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    }
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    }
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    }
++    if  (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    }
++    if  (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    }
++    if  (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS) {
++      codec_selectable_capability_.channel_mode |=
++          BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    }
++
++    if (codec_config_.channel_mode != BTAV_A2DP_CODEC_CHANNEL_MODE_NONE) break;
++
++    // Compute the common capability
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_MONO)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_MONO;
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_STEREO)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++    if (channelMode & A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS)
++      codec_capability_.channel_mode |= BTAV_A2DP_CODEC_CHANNEL_MODE_STEREO;
++
++    // No user preference - try the codec audio config
++    if (select_audio_channel_mode(&codec_audio_config_, channelMode,
++                                  &result_config_cie, &codec_config_)) {
++      break;
++    }
++
++    // No user preference - try the default config
++    if (select_best_channel_mode(
++            a2dp_aptx_adaptive_default_config.channelMode & sink_info_cie.channelMode,
++            &result_config_cie, &codec_config_)) {
++      break;
++    }
++
++    // No user preference - use the best match
++    if (select_best_channel_mode(channelMode, &result_config_cie,
++                                 &codec_config_)) {
++      break;
++    }
++  } while (false);
++  if (codec_config_.channel_mode == BTAV_A2DP_CODEC_CHANNEL_MODE_NONE) {
++    ALOGE("%s: cannot match channel mode: source caps = 0x%x "
++              "sink info = 0x%x",
++              __func__, a2dp_aptx_adaptive_caps.channelMode,
++              sink_info_cie.channelMode);
++    goto fail;
++  }
++  ALOGE("%s: channel mode: source caps = 0x%x "
++              "sink info = 0x%x",
++              __func__, a2dp_aptx_adaptive_caps.channelMode,
++              sink_info_cie.channelMode);
++
++  result_config_cie.sourceType = a2dp_aptx_adaptive_caps.sourceType;
++
++  memset(result_config_cie.reserved_data, 0, sizeof(result_config_cie.reserved_data));
++
++  if (A2DP_BuildInfoAptxAdaptive(AVDT_MEDIA_TYPE_AUDIO, &result_config_cie,
++                           p_result_codec_config) != A2DP_SUCCESS) {
++    goto fail;
++  }
++
++  if (codec_user_config_.codec_specific_2 != codec_config_.codec_specific_2) {
++    codec_config_.codec_specific_2 = codec_user_config_.codec_specific_2;
++  }
++  if (codec_user_config_.codec_specific_3 != codec_config_.codec_specific_3) {
++    codec_user_config_.codec_specific_3 = codec_config_.codec_specific_3;
++  }
++
++  ALOGE("setting codec_config_.codec_specific_4 to channelMode: %d", channelMode);
++  // Store the channel mode in spare field
++  codec_config_.codec_specific_4 &= (int64_t) CHANNEL_MODE_BACK_CHANNEL_MASK;
++  codec_config_.codec_specific_4 |= (int64_t) channelMode << 24;
++
++  // Create a local copy of the peer codec capability/config, and the
++  // result codec config.
++  if (is_capability) {
++    status = A2DP_BuildInfoAptxAdaptive(AVDT_MEDIA_TYPE_AUDIO, &sink_info_cie,
++                                  ota_codec_peer_capability_.data());
++  } else {
++    status = A2DP_BuildInfoAptxAdaptive(AVDT_MEDIA_TYPE_AUDIO, &sink_info_cie,
++                                  ota_codec_peer_config_.data());
++  }
++  CHECK(status == A2DP_SUCCESS);
++  status = A2DP_BuildInfoAptxAdaptive(AVDT_MEDIA_TYPE_AUDIO, &result_config_cie,
++                                ota_codec_config_.data());
++  CHECK(status == A2DP_SUCCESS);
++  return A2DP_SUCCESS;
++
++fail:
++  // Restore the internal state
++  codec_config_ = saved_codec_config;
++  codec_capability_ = saved_codec_capability;
++  codec_selectable_capability_ = saved_codec_selectable_capability;
++  codec_user_config_ = saved_codec_user_config;
++  codec_audio_config_ = saved_codec_audio_config;
++  memcpy(ota_codec_config_.data(), saved_ota_codec_config, AVDT_CODEC_SIZE);
++  memcpy(ota_codec_peer_capability_.data(), saved_ota_codec_peer_capability,
++         AVDT_CODEC_SIZE);
++  memcpy(ota_codec_peer_config_.data(), saved_ota_codec_peer_config,
++         AVDT_CODEC_SIZE);
++  return A2DP_FAIL;
++}
++
++bool A2dpCodecConfigAptxAdaptive::setPeerCodecCapabilities(const uint8_t* peer) {
++  std::lock_guard<std::recursive_mutex> lock(codec_mutex_);
++  const auto saved_config = codec_config_;
++  const auto saved_capability = codec_capability_;
++  const auto saved_user = codec_user_config_;
++  const auto saved_audio = codec_audio_config_;
++  const auto saved_ota = ota_codec_config_;
++  const auto saved_peer_config = ota_codec_peer_config_;
++  uint8_t result[AVDT_CODEC_SIZE]{};
++  const bool ok = setCodecConfig(peer, true, result) == A2DP_SUCCESS;
++  // Retain only selectable capabilities and the peer's OTA capabilities.
++  codec_config_ = saved_config;
++  codec_capability_ = saved_capability;
++  codec_user_config_ = saved_user;
++  codec_audio_config_ = saved_audio;
++  ota_codec_config_ = saved_ota;
++  ota_codec_peer_config_ = saved_peer_config;
++  return ok;
++}
++
++void A2dpCodecConfigAptxAdaptive::debug_codec_dump(int fd) {
++  A2dpCodecConfig::debug_codec_dump(fd);
++  dprintf(fd, "  aptX Adaptive: Qualcomm DSP R2 offload only\n");
++}
+diff --git a/system/stack/include/a2dp_constants.h b/system/stack/include/a2dp_constants.h
+index 73eb300..01b42c3 100644
+--- a/system/stack/include/a2dp_constants.h
++++ b/system/stack/include/a2dp_constants.h
+@@ -23,7 +23,9 @@
+ #include <optional>
+ 
+ /* Maximum size in bytes of the codec capabilities information element. */
+-#define AVDT_CODEC_SIZE 20
++// Qualcomm Adaptive uses a 42-byte codec element plus its length octet.
++// Match the Qualcomm stack's capacity; all native users must be rebuilt.
++#define AVDT_CODEC_SIZE 45
+ 
+ /* Profile supported features */
+ #define A2DP_SUPF_PLAYER 0x0001
+@@ -92,6 +94,7 @@ enum class CodecId : uint64_t {
+   LDAC = VendorCodecId(kLdacCompanyId, kLdacCodecId),
+   OPUS = VendorCodecId(kOpusCompanyId, kOpusCodecId),
+   LHDCV5 = VendorCodecId(kLhdcV5CompanyId, kLhdcV5CodecId),
++  APTX_ADAPTIVE = VendorCodecId(0x00d7, 0x00ad),
+ };
+ 
+ /// Parse the standardized codec identifier from the Media Codec Capabilities.
+diff --git a/system/stack/include/a2dp_ext.h b/system/stack/include/a2dp_ext.h
+index 208ab88..649defe 100644
+--- a/system/stack/include/a2dp_ext.h
++++ b/system/stack/include/a2dp_ext.h
+@@ -18,7 +18,6 @@
+ 
+ #include <vector>
+ 
+-#include "audio_hal_interface/a2dp_encoding.h"
+ #include "stack/include/a2dp_codec_api.h"
+ 
+ /// Codec configuration for codecs that are supported by a2dp hardware offload
+diff --git a/system/stack/include/a2dp_vendor_aptx_adaptive.h b/system/stack/include/a2dp_vendor_aptx_adaptive.h
+new file mode 100644
+index 0000000..daee546
+--- /dev/null
++++ b/system/stack/include/a2dp_vendor_aptx_adaptive.h
+@@ -0,0 +1,211 @@
++/******************************************************************************
++    Copyright (c) 2018, The Linux Foundation. All rights reserved.
++
++    Redistribution and use in source and binary forms, with or without
++    modification, are permitted (subject to the limitations in the
++    disclaimer below) provided that the following conditions are met:
++
++       * Redistributions of source code must retain the above copyright
++         notice, this list of conditions and the following disclaimer.
++
++       * Redistributions in binary form must reproduce the above
++         copyright notice, this list of conditions and the following
++         disclaimer in the documentation and/or other materials provided
++         with the distribution.
++
++       * Neither the name of The Linux Foundation nor the names of its
++         contributors may be used to endorse or promote products derived
++         from this software without specific prior written permission.
++
++    NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
++    GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
++    HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
++    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++    IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
++    GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
++    IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ ******************************************************************************/
++
++//
++// A2DP Codec API for aptX-adaptive
++//
++
++#ifndef A2DP_VENDOR_APTX_ADAPTIVE_H
++#define A2DP_VENDOR_APTX_ADAPTIVE_H
++
++#include "stack/include/a2dp_codec_api.h"
++#include "stack/include/a2dp_vendor_aptx_adaptive_constants.h"
++#include "stack/include/avdt_api.h"
++
++class A2dpCodecConfigAptxAdaptive: public A2dpCodecConfig {
++ public:
++  A2dpCodecConfigAptxAdaptive(btav_a2dp_codec_priority_t codec_priority);
++  virtual ~A2dpCodecConfigAptxAdaptive();
++
++  bool init() override;
++  tA2DP_STATUS setCodecConfig(const uint8_t* p_peer_codec_info, bool is_capability,
++                      uint8_t* p_result_codec_config) override;
++
++  bool setPeerCodecCapabilities(const uint8_t* peer) override;
++
++ private:
++  // Donor negotiation scratch state; current public capabilities are exposed
++  // through codec_local_capability_ and codec_selectable_capability_.
++  btav_a2dp_codec_config_t codec_capability_{};
++  bool useRtpHeaderMarkerBit() const override;
++
++  void debug_codec_dump(int fd) override;
++};
++
++// data type for the aptX-adaptive Codec Information Element */
++
++typedef struct {
++  uint8_t ttp_ll_0;
++  uint8_t ttp_ll_1;
++  uint8_t ttp_hq_0;
++  uint8_t ttp_hq_1;
++  uint8_t ttp_tws_0;
++  uint8_t ttp_tws_1;
++  uint8_t reserved_15thbyte;
++
++  //Below are the additions for R2
++  uint8_t cap_ext_ver_num;             //capability extension ver number
++  uint32_t aptx_adaptive_sup_features; //aptx-adaptive supported features
++  uint8_t first_setup_pref;            //first setup preference
++  uint8_t second_setup_pref;           //second setup preference
++  uint8_t third_setup_pref;            //third setup preference
++  uint8_t fourth_setup_pref;           //fourth setup preference
++  uint8_t eoc0;                        //no further expansion
++  uint8_t eoc1;                        //capability extension end
++} tA2DP_APTX_ADAPTIVE_VENDOR_DATA;
++// This is due to be updated
++typedef struct {
++  uint32_t vendorId;
++  uint16_t codecId;    /* Codec ID for aptX-adaptive */
++  uint8_t sampleRate;  /* Sampling Frequency */
++  uint8_t sourceType;  /* AVRCP CUSTOM, Q2Q OR NQ2Q, RESERVED */
++  uint8_t channelMode;
++  tA2DP_APTX_ADAPTIVE_VENDOR_DATA aptx_data;
++  btav_a2dp_codec_bits_per_sample_t bits_per_sample;
++  uint8_t reserved_data[A2DP_APTX_ADAPTIVE_RESERVED_DATA];  // reserved for future exp
++} tA2DP_APTX_ADAPTIVE_CIE;
++// parses the given codec info and copies the needed info
++// to Codec Information Element and returns same CIE.
++bool A2DP_GetAptxAdaptiveCIE(const uint8_t* p_codec_info,
++                        tA2DP_APTX_ADAPTIVE_CIE *cfg_cie);
++// Checks whether the codec capabilities contain a valid A2DP aptX-adaptive Source
++// codec.
++// NOTE: only codecs that are implemented are considered valid.
++// Returns true if |p_codec_info| contains information about a valid aptX-adaptive
++// codec, otherwise false.
++bool A2DP_IsVendorSourceCodecValidAptxAdaptive(const uint8_t* p_codec_info);
++
++// Checks whether the codec capabilities contain a valid peer A2DP aptX-adaptive Sink
++// codec.
++// NOTE: only codecs that are implemented are considered valid.
++// Returns true if |p_codec_info| contains information about a valid aptX-adaptive
++// codec, otherwise false.
++bool A2DP_IsVendorPeerSinkCodecValidAptxAdaptive(const uint8_t* p_codec_info);
++
++// Checks whether the A2DP data packets should contain RTP header.
++// |content_protection_enabled| is true if Content Protection is
++// enabled. |p_codec_info| contains information about the codec capabilities.
++// Returns true if the A2DP data packets should contain RTP header, otherwise
++// false.
++bool A2DP_VendorUsesRtpHeaderAptxAdaptive(bool content_protection_enabled,
++                                    const uint8_t* p_codec_info);
++
++// Gets the A2DP aptX-adaptive codec name for a given |p_codec_info|.
++const char* A2DP_VendorCodecNameAptxAdaptive(const uint8_t* p_codec_info);
++
++// Checks whether two A2DP aptX-adaptive codecs |p_codec_info_a| and |p_codec_info_b|
++// have the same type.
++// Returns true if the two codecs have the same type, otherwise false.
++bool A2DP_VendorCodecTypeEqualsAptxAdaptive(const uint8_t* p_codec_info_a,
++                                      const uint8_t* p_codec_info_b);
++
++// Checks whether two A2DP aptX-adaptive codecs |p_codec_info_a| and |p_codec_info_b|
++// are exactly the same.
++// Returns true if the two codecs are exactly the same, otherwise false.
++// If the codec type is not aptX-adaptive, the return value is false.
++bool A2DP_VendorCodecEqualsAptxAdaptive(const uint8_t* p_codec_info_a,
++                                  const uint8_t* p_codec_info_b);
++
++// Gets the track sample rate value for the A2DP aptX-adaptive codec.
++// |p_codec_info| is a pointer to the aptX-adaptive codec_info to decode.
++// Returns the track sample rate on success, or -1 if |p_codec_info|
++// contains invalid codec information.
++int A2DP_VendorGetTrackSampleRateAptxAdaptive(const uint8_t* p_codec_info);
++
++// Gets the bits per audio sample for the A2DP aptX-adaptive codec.
++// |p_codec_info| is a pointer to the aptX-adaptive codec_info to decode.
++// Returns the bits per audio sample on success, or -1 if |p_codec_info|
++// contains invalid codec information.
++int A2DP_VendorGetTrackBitsPerSampleAptxAdaptive(const uint8_t* p_codec_info);
++
++// Gets the channel count for the A2DP aptX-adaptive codec.
++// |p_codec_info| is a pointer to the aptX-adaptive codec_info to decode.
++// Returns the channel count on success, or -1 if |p_codec_info|
++// contains invalid codec information.
++int A2DP_VendorGetTrackChannelCountAptxAdaptive(const uint8_t* p_codec_info);
++
++// Gets the A2DP aptX-adaptive audio data timestamp from an audio packet.
++// |p_codec_info| contains the codec information.
++// |p_data| contains the audio data.
++// The timestamp is stored in |p_timestamp|.
++// Returns true on success, otherwise false.
++bool A2DP_VendorGetPacketTimestampAptxAdaptive(const uint8_t* p_codec_info,
++                                         const uint8_t* p_data,
++                                         uint32_t* p_timestamp);
++
++// Builds A2DP aptX-adaptive codec header for audio data.
++// |p_codec_info| contains the codec information.
++// |p_buf| contains the audio data.
++// |frames_per_packet| is the number of frames in this packet.
++// Returns true on success, otherwise false.
++bool A2DP_VendorBuildCodecHeaderAptxAdaptive(const uint8_t* p_codec_info,
++                                       BT_HDR* p_buf,
++                                       uint16_t frames_per_packet);
++
++// Decodes and displays aptX-adaptive codec info (for debugging).
++// |p_codec_info| is a pointer to the aptX-adaptive codec_info to decode and display.
++bool A2DP_VendorDumpCodecInfoAptxAdaptive(const uint8_t* p_codec_info);
++
++// Gets the A2DP aptX-adaptive encoder interface that can be used to encode and
++// prepare A2DP packets for transmission - see |tA2DP_ENCODER_INTERFACE|.
++// |p_codec_info| contains the codec information.
++// Returns the A2DP aptX-adaptive encoder interface if the |p_codec_info| is valid
++// and supported, otherwise NULL.
++const tA2DP_ENCODER_INTERFACE* A2DP_VendorGetEncoderInterfaceAptxAdaptive(
++    const uint8_t* p_codec_info);
++
++// Adjusts the A2DP aptX-adaptive codec, based on local support and Bluetooth
++// specification.
++// |p_codec_info| contains the codec information to adjust.
++// Returns true if |p_codec_info| is valid and supported, otherwise false.
++bool A2DP_VendorAdjustCodecAptxAdaptive(uint8_t* p_codec_info);
++
++// Gets the A2DP aptX-adaptive Source codec index for a given |p_codec_info|.
++// Returns the corresponding |btav_a2dp_codec_index_t| on success,
++// otherwise |BTAV_A2DP_CODEC_INDEX_MAX|.
++btav_a2dp_codec_index_t A2DP_VendorSourceCodecIndexAptxAdaptive(
++    const uint8_t* p_codec_info);
++
++// Gets the A2DP aptX-adaptive Source codec name.
++const char* A2DP_VendorCodecIndexStrAptxAdaptive(void);
++
++// Initializes A2DP aptX-adaptive Source codec information into |tAVDT_CFG|
++// configuration entry pointed by |p_cfg|.
++bool A2DP_VendorInitCodecConfigAptxAdaptive(AvdtpSepConfig* p_cfg);
++
++// Checks peer initiated setconfig with DUT supported config
++// and returns proper status.
++tA2DP_STATUS A2DP_VendorIsCodecConfigMatchAptxAdaptive(const uint8_t* p_codec_info);
++
++#endif  // A2DP_VENDOR_APTX_ADAPTIVE_H
+diff --git a/system/stack/include/a2dp_vendor_aptx_adaptive_constants.h b/system/stack/include/a2dp_vendor_aptx_adaptive_constants.h
+new file mode 100644
+index 0000000..71e5fc9
+--- /dev/null
++++ b/system/stack/include/a2dp_vendor_aptx_adaptive_constants.h
+@@ -0,0 +1,109 @@
++/******************************************************************************
++    Copyright (c) 2018, The Linux Foundation. All rights reserved.
++
++    Redistribution and use in source and binary forms, with or without
++    modification, are permitted (subject to the limitations in the
++    disclaimer below) provided that the following conditions are met:
++
++       * Redistributions of source code must retain the above copyright
++         notice, this list of conditions and the following disclaimer.
++
++       * Redistributions in binary form must reproduce the above
++         copyright notice, this list of conditions and the following
++         disclaimer in the documentation and/or other materials provided
++         with the distribution.
++
++       * Neither the name of The Linux Foundation nor the names of its
++         contributors may be used to endorse or promote products derived
++         from this software without specific prior written permission.
++
++    NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
++    GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
++    HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
++    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++    IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
++    GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
++    IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
++    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++    IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ ******************************************************************************/
++
++//
++// A2DP constants for aptX-adaptive codec
++//
++
++#ifndef A2DP_VENDOR_APTX_ADAPTIVE_CONSTANTS_H
++#define A2DP_VENDOR_APTX_ADAPTIVE_CONSTANTS_H
++
++/* aptX-adaptive codec specific settings */
++#define A2DP_APTX_ADAPTIVE_CODEC_LEN 42
++#define A2DP_APTX_ADAPTIVE_CODEC_FEATURE_LEN 26
++#define A2DP_APTX_ADAPTIVE_RESERVED_DATA (A2DP_APTX_ADAPTIVE_CODEC_LEN \
++        - (A2DP_APTX_ADAPTIVE_CODEC_FEATURE_LEN + 2))
++// actual id's ..
++#define A2DP_APTX_ADAPTIVE_VENDOR_ID               (0x000000D7)
++#define A2DP_APTX_ADAPTIVE_CODEC_ID_BLUETOOTH      (0x00AD)
++
++#define A2DP_APTX_ADAPTIVE_SAMPLERATE_44100        (0x40)
++#define A2DP_APTX_ADAPTIVE_SAMPLERATE_48000        (0x10)
++#define A2DP_APTX_ADAPTIVE_SAMPLERATE_96000        (0xA0)
++
++#define A2DP_APTX_ADAPTIVE_SOURCE_TYPE_1           (0x00) //(0x00)
++#define A2DP_APTX_ADAPTIVE_SOURCE_TYPE_2           (0x02) //(0x02)
++#define A2DP_APTX_ADAPTIVE_SOURCE_TYPE_3           (0x04) //(0x04)
++#define A2DP_APTX_ADAPTIVE_SOURCE_TYPE_4           (0x06) //(0x06)
++/*
++#define A2DP_APTX_ADAPTIVE_AVRCP_CUSTOM_UNSUPPORTED(0x00)
++#define A2DP_APTX_ADAPTIVE_AVRCP_CUSTOM_SUPPORTED  (0x01)
++#define A2DP_APTX_ADAPTIVE_Q2Q                     (0x00)
++#define A2DP_APTX_ADAPTIVE_NQ2Q                    (0x01)
++#define A2DP_APTX_ADAPTIVE_RESERVED0               (0x00)
++*/
++#define A2DP_APTX_ADAPTIVE_CHANNELS_MONO          (0x01)
++#define A2DP_APTX_ADAPTIVE_CHANNELS_STEREO        (0x02)
++#define A2DP_APTX_ADAPTIVE_CHANNELS_TWS_STEREO    (0x04)
++#define A2DP_APTX_ADAPTIVE_CHANNELS_JOINT_STEREO  (0x08)
++#define A2DP_APTX_ADAPTIVE_CHANNELS_TWS_MONO      (0x10)
++#define A2DP_APTX_ADAPTIVE_CHANNELS_TWS_PLUS      (0x20)
++
++#define A2DP_APTX_ADAPTIVE_TTP_LL_0  0x50
++#define A2DP_APTX_ADAPTIVE_TTP_LL_1  0x64
++#define A2DP_APTX_ADAPTIVE_TTP_HQ_0  0x64
++#define A2DP_APTX_ADAPTIVE_TTP_HQ_1  0x64
++#define A2DP_APTX_ADAPTIVE_TTP_TWS_0 0xFF
++#define A2DP_APTX_ADAPTIVE_TTP_TWS_1 0xFF
++#define A2DP_APTX_ADAPTIVE_RESERVED_13THBYTE 0x00
++#define A2DP_APTX_ADAPTIVE_RESERVED_14THBYTE 0x00
++#define A2DP_APTX_ADAPTIVE_RESERVED_15THBYTE 0x00
++#define A2DP_APTX_ADAPTIVE_EOC0 0x00
++#define A2DP_APTX_ADAPTIVE_EOC1 0xAA
++
++#define A2DP_APTX_ADAPTIVE_CAP_EXT_VER_NUM         (0x01)
++#define A2DP_APTX_ADAPTIVE_SUPPORTED_FEATURES      (0x0F000000)
++#define A2DP_APTX_ADAPTIVE_R2_1_SUPPORTED_FEATURES (0x0F000003)
++#define A2DP_APTX_ADAPTIVE_R2_2_SUPPORTED_FEATURES (0x0F000017)
++#define A2DP_APTX_ADAPTIVE_FIRST_SETUP_PREF        (0x02)
++#define A2DP_APTX_ADAPTIVE_SECOND_SETUP_PREF       (0x03)
++#define A2DP_APTX_ADAPTIVE_THIRD_SETUP_PREF        (0x03)
++#define A2DP_APTX_ADAPTIVE_FOURTH_SETUP_PREF       (0x03)
++
++#define A2DP_APTX_ADAPTIVE_SOURCE_SPILT_TX_SUPPORTED (0x00000004)
++
++#define A2DP_APTX_ADAPTIVE_OTHER_FEATURES_NONE     (0x00000000)
++#define QCOM_AV_APTX_ADAPTIVE_AUDIO                (0x00)
++#define QCOM_CODEC_APTX_ADAPTIVE_ID                (0xff)
++#define A2DP_APTX_ADAPTIVE_CHANNEL                 (0x0001)
++#define A2DP_APTX_ADAPTIVE_SAMPLERATE              (0x22)
++#define CHANNEL_MODE_BACK_CHANNEL_MASK             (0x1F000000)
++
++/* aptX-adaptive R2.2 support */
++#define APTX_ADAPTIVE_R2_2_SUPPORT_MASK            (0x00003000)
++#define APTX_ADAPTIVE_R2_2_SUPPORT_NOT_AVAILABLE   (0x00001000)
++#define APTX_ADAPTIVE_R2_2_SUPPORT_AVAILABLE       (0x00002000)
++#define APTX_ADAPTIVE_SINK_R2_2_SUPPORT_CAP        (0x00000080)
++
++#endif  // A2DP_VENDOR_APTX_ADAPTIVE_CONSTANTS_H
+diff --git a/system/stack/test/a2dp/media_codec_capabilities_test.cc b/system/stack/test/a2dp/media_codec_capabilities_test.cc
+index e266912..ee29c39 100644
+--- a/system/stack/test/a2dp/media_codec_capabilities_test.cc
++++ b/system/stack/test/a2dp/media_codec_capabilities_test.cc
+@@ -18,6 +18,7 @@
+ #include <gtest/gtest.h>
+ 
+ #include <cstdint>
++#include <array>
+ #include <string>
+ 
+ #include "hardware/bt_av.h"
+@@ -132,6 +133,28 @@ namespace bluetooth::a2dp {
+ 
+ class MediaCodecCapabilitiesTest : public ::testing::Test {};
+ 
++TEST_F(MediaCodecCapabilitiesTest, PreservesFullAdaptiveInformationElement) {
++  static_assert(AVDT_CODEC_SIZE >= 43);
++  std::array<uint8_t, AVDT_CODEC_SIZE> element{};
++  element[0] = 42;
++  element[2] = 0xff;
++  element[3] = 0xd7;  // Qualcomm vendor ID, little endian.
++  element[7] = 0xad;  // Adaptive codec ID, little endian.
++  // Nonzero bytes beyond the former 20-byte capacity detect truncation.
++  element[27] = 0xaa;
++  element[42] = 0x5a;
++  bluetooth::a2dp::MediaCodecCapabilities stored(element.data());
++  EXPECT_EQ(stored.length(), 42u);
++  EXPECT_EQ(stored[27], 0xaa);
++  EXPECT_EQ(stored[42], 0x5a);
++  EXPECT_EQ(stored.codecId(), static_cast<CodecId>(
++      bluetooth::a2dp::VendorCodecId(0x00d7, 0x00ad)));
++  btav_a2dp_codec_info_t provider{};
++  static_assert(sizeof(provider.media_codec_capabilites) == AVDT_CODEC_SIZE);
++  std::copy(element.begin(), element.end(), provider.media_codec_capabilites);
++  EXPECT_EQ(provider.media_codec_capabilites[42], 0x5a);
++}
++
+ // Test the correctness of the method `bluetooth::a2dp::ParseCodecId`.
+ TEST_F(MediaCodecCapabilitiesTest, ParseCodecId) {
+   ASSERT_EQ(ParseCodecId(kCodecCapabilitiesWithTruncatedMediaCodecType), std::nullopt);

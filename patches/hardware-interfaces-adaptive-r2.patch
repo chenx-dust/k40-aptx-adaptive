@@ -1,0 +1,55 @@
+diff --git a/bluetooth/audio/utils/Android.bp b/bluetooth/audio/utils/Android.bp
+index 7f7d600..0ee4cb0 100644
+--- a/bluetooth/audio/utils/Android.bp
++++ b/bluetooth/audio/utils/Android.bp
+@@ -73,6 +73,7 @@ cc_library_shared {
+         "server_configurable_flags",
+     ],
+     static_libs: [
++        "libk40_aptx_adaptive_config",
+         "btaudiohal_flags_c_lib",
+         "libbluetooth_offload_a2dp_audio",
+         "libbluetooth_offload_leaudio_audio",
+diff --git a/bluetooth/audio/utils/aidl_session/BluetoothAudioCodecs.cpp b/bluetooth/audio/utils/aidl_session/BluetoothAudioCodecs.cpp
+index 630b9fc..56623c9 100644
+--- a/bluetooth/audio/utils/aidl_session/BluetoothAudioCodecs.cpp
++++ b/bluetooth/audio/utils/aidl_session/BluetoothAudioCodecs.cpp
+@@ -17,6 +17,7 @@
+ #define LOG_TAG "BTAudioCodecsAidl"
+ 
+ #include "BluetoothAudioCodecs.h"
++#include "adaptive_capabilities.h"
+ 
+ #include <aidl/android/hardware/bluetooth/audio/AacCapabilities.h>
+ #include <aidl/android/hardware/bluetooth/audio/AacObjectType.h>
+@@ -235,6 +236,11 @@ std::vector<PcmCapabilities> BluetoothAudioCodecs::GetSoftwarePcmCapabilities()
+ 
+ std::vector<CodecCapabilities> BluetoothAudioCodecs::GetA2dpOffloadCodecCapabilities(
+         const SessionType& session_type) {
++    // Only Adaptive uses the K40 DSP bridge. Other encoders keep the existing
++    // Bluetooth PCM/software path rather than reaching an unsupported bridge.
++    if (session_type == SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH) {
++        return {::k40::AdaptiveR2Capabilities()};
++    }
+     if (session_type != SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH &&
+         session_type != SessionType::A2DP_HARDWARE_OFFLOAD_DECODING_DATAPATH) {
+         return {};
+@@ -299,6 +305,9 @@ bool BluetoothAudioCodecs::IsSoftwarePcmConfigurationValid(const PcmConfiguratio
+ 
+ bool BluetoothAudioCodecs::IsOffloadCodecConfigurationValid(
+         const SessionType& session_type, const CodecConfiguration& codec_config) {
++    if (session_type == SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH) {
++        return ::k40::IsAdaptiveR2ConfigurationSupported(codec_config);
++    }
+     if (session_type != SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH &&
+         session_type != SessionType::A2DP_HARDWARE_OFFLOAD_DECODING_DATAPATH) {
+         LOG(ERROR) << __func__ << ": Invalid SessionType=" << toString(session_type);
+@@ -337,6 +346,8 @@ bool BluetoothAudioCodecs::IsOffloadCodecConfigurationValid(
+             }
+             break;
+         case CodecType::APTX_ADAPTIVE:
++            return session_type == SessionType::A2DP_HARDWARE_OFFLOAD_ENCODING_DATAPATH &&
++                   ::k40::IsAdaptiveR2ConfigurationSupported(codec_config);
+         case CodecType::APTX_ADAPTIVE_LE:
+         case CodecType::APTX_ADAPTIVE_LEX:
+         case CodecType::LC3:

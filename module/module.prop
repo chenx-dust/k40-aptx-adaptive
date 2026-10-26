@@ -1,0 +1,6 @@
+id=k40_pixelos_adaptive
+name=K40 PixelOS aptX Adaptive (experimental)
+version=0.5-test
+versionCode=5
+author=Local build
+description=Experimental alioth SDK37 Adaptive DSP bridge. Audited component hashes required; build number alone is not restricted. Runtime audio unverified.

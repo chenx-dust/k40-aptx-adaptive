@@ -1,0 +1,42 @@
+diff --git a/media/java/android/media/AudioSystem.java b/media/java/android/media/AudioSystem.java
+index 752ade8c0..0f15f5ae3 100644
+--- a/media/java/android/media/AudioSystem.java
++++ b/media/java/android/media/AudioSystem.java
+@@ -271,6 +271,11 @@ public class AudioSystem
+     /** @hide */
+     public static final int AUDIO_FORMAT_LDAC           = 0x23000000;
+     /** @hide */
++    public static final int AUDIO_FORMAT_APTX_ADAPTIVE  = 0x27000000;
++    // Vendor codec identity: Qualcomm 0x00d7, codec 0x00ad, vendor media type 0xff.
++    // Kept local because Bluetooth module hidden APIs are not in framework stubs.
++    private static final long BLUETOOTH_CODEC_ID_APTX_ADAPTIVE = 0x00ad_00d7_ffL;
++    /** @hide */
+     public static final int AUDIO_FORMAT_LHDC           = 0x28000000;
+     /** @hide */
+     public static final int AUDIO_FORMAT_LC3            = 0x2B000000;
+@@ -290,6 +295,7 @@ public class AudioSystem
+                 AUDIO_FORMAT_SBC,
+                 AUDIO_FORMAT_APTX,
+                 AUDIO_FORMAT_APTX_HD,
++                AUDIO_FORMAT_APTX_ADAPTIVE,
+                 AUDIO_FORMAT_LDAC,
+                 AUDIO_FORMAT_LHDC,
+                 AUDIO_FORMAT_LC3,
+@@ -358,6 +364,7 @@ public class AudioSystem
+             case AUDIO_FORMAT_SBC -> BluetoothCodecType.CODEC_ID_SBC;
+             case AUDIO_FORMAT_APTX -> BluetoothCodecType.CODEC_ID_APTX;
+             case AUDIO_FORMAT_APTX_HD -> BluetoothCodecType.CODEC_ID_APTX_HD;
++            case AUDIO_FORMAT_APTX_ADAPTIVE -> BLUETOOTH_CODEC_ID_APTX_ADAPTIVE;
+             case AUDIO_FORMAT_LDAC -> {
+                 if (com.android.bluetooth.flags.Flags.a2dpLdacApi()) {
+                     yield BluetoothCodecType.CODEC_ID_SONY_LDAC;
+@@ -411,6 +418,9 @@ public class AudioSystem
+         if (codecId == BluetoothCodecType.CODEC_ID_APTX) {
+             return AudioSystem.AUDIO_FORMAT_APTX;
+         }
++        if (codecId == BLUETOOTH_CODEC_ID_APTX_ADAPTIVE) {
++            return AudioSystem.AUDIO_FORMAT_APTX_ADAPTIVE;
++        }
+         if (codecId == BluetoothCodecType.CODEC_ID_APTX_HD) {
+             return AudioSystem.AUDIO_FORMAT_APTX_HD;
+         }
